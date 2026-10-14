@@ -25,7 +25,27 @@ import (
 	"github.com/google/ax/pkg/apis/v1alpha1"
 )
 
-const schedulingInterval = 5 * time.Second
+// SchedulingOptions controls retries when Substrate has no worker capacity.
+type SchedulingOptions struct {
+	RetryInterval time.Duration
+	MaxRetryDelay time.Duration
+}
+
+// DefaultSchedulingOptions favors prompt use of newly available workers.
+func DefaultSchedulingOptions() SchedulingOptions {
+	return SchedulingOptions{RetryInterval: time.Second, MaxRetryDelay: 5 * time.Second}
+}
+
+// Validate rejects retry settings that cannot produce a positive, bounded delay.
+func (o SchedulingOptions) Validate() error {
+	if o.RetryInterval <= 0 {
+		return errors.New("schedule-retry-interval must be positive")
+	}
+	if o.MaxRetryDelay < o.RetryInterval {
+		return errors.New("schedule-retry-max-delay must be at least schedule-retry-interval")
+	}
+	return nil
+}
 
 type schedulingRetry struct {
 	next  time.Time
@@ -35,18 +55,21 @@ type schedulingRetry struct {
 // RetryPendingTasks retries capacity-blocked tasks until ctx is canceled. The
 // store is the source of truth, so pending resumes survive server restarts.
 // Run once per server, using the same resource locks as the task RPCs.
-func (s *Server) RetryPendingTasks(ctx context.Context) {
+func (s *Server) RetryPendingTasks(ctx context.Context, opts SchedulingOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
 	if s.reconciler == nil {
-		return
+		return nil
 	}
 	retries := make(map[string]schedulingRetry)
-	ticker := time.NewTicker(schedulingInterval)
+	ticker := time.NewTicker(opts.RetryInterval)
 	defer ticker.Stop()
 	for {
-		s.retryPendingTasks(ctx, time.Now(), retries)
+		s.retryPendingTasks(ctx, time.Now(), retries, opts)
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 	}
@@ -64,7 +87,7 @@ func waitingForWorker(task *v1alpha1.Task) bool {
 	return false
 }
 
-func (s *Server) retryPendingTasks(ctx context.Context, now time.Time, retries map[string]schedulingRetry) {
+func (s *Server) retryPendingTasks(ctx context.Context, now time.Time, retries map[string]schedulingRetry, opts SchedulingOptions) {
 	tasks, err := s.store.ListTasks(ctx, "", math.MaxInt64, 0)
 	if err != nil {
 		slog.Error("listing pending tasks", "error", err)
@@ -92,9 +115,10 @@ func (s *Server) retryPendingTasks(ctx context.Context, now time.Time, retries m
 			slog.Error("retrying pending task", "task", key, "error", err)
 		}
 		if retry.delay == 0 {
-			retry.delay = schedulingInterval
+			retry.delay = opts.RetryInterval
 		} else {
-			retry.delay = min(2*retry.delay, 30*time.Second)
+			// Saturate before adding so large configured durations cannot overflow.
+			retry.delay += min(retry.delay, opts.MaxRetryDelay-retry.delay)
 		}
 		retry.next = now.Add(retry.delay)
 		retries[key] = retry

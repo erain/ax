@@ -47,6 +47,10 @@ func main() {
 		defaultTemplateAtespace string
 	)
 
+	scheduling := server.DefaultSchedulingOptions()
+	flag.DurationVar(&scheduling.RetryInterval, "schedule-retry-interval", scheduling.RetryInterval, "Initial delay and scan interval for tasks waiting for a worker")
+	flag.DurationVar(&scheduling.MaxRetryDelay, "schedule-retry-max-delay", scheduling.MaxRetryDelay, "Maximum delay between retries for tasks waiting for a worker")
+
 	flag.StringVar(&listenAddr, "addr", ":8080", "HTTP listen address")
 	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis server address")
 	flag.StringVar(&redisPassword, "redis-password", "", "Redis password")
@@ -59,6 +63,10 @@ func main() {
 	flag.StringVar(&defaultTemplate, "template", "default-template", "Default Substrate ActorTemplate name")
 	flag.StringVar(&defaultTemplateAtespace, "template-atespace", "ax-system", "Default Substrate ActorTemplate atespace")
 	flag.Parse()
+	if err := scheduling.Validate(); err != nil {
+		slog.Error("invalid scheduling configuration", "error", err)
+		os.Exit(2)
+	}
 
 	if envAddr := os.Getenv("ADDR"); envAddr != "" {
 		listenAddr = envAddr
@@ -124,7 +132,9 @@ func main() {
 	retriesDone := make(chan struct{})
 	go func() {
 		defer close(retriesDone)
-		srv.RetryPendingTasks(ctx)
+		if err := srv.RetryPendingTasks(ctx, scheduling); err != nil {
+			slog.Error("retrying pending tasks", "error", err)
+		}
 	}()
 
 	go func() {

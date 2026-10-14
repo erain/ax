@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -72,11 +73,11 @@ func TestSchedulingLifecycle(t *testing.T) {
 			}
 			now := time.Now()
 			retries := make(map[string]schedulingRetry)
-			s.retryPendingTasks(ctx, now, retries)
+			s.retryPendingTasks(ctx, now, retries, DefaultSchedulingOptions())
 			if r.calls != 3 {
 				t.Fatalf("calls = %d, want create, resume, retry", r.calls)
 			}
-			s.retryPendingTasks(ctx, now.Add(time.Second), retries)
+			s.retryPendingTasks(ctx, now.Add(500*time.Millisecond), retries, DefaultSchedulingOptions())
 			if r.calls != 3 {
 				t.Fatal("retried before backoff expired")
 			}
@@ -99,7 +100,7 @@ func TestSchedulingLifecycle(t *testing.T) {
 				retries = make(map[string]schedulingRetry)
 			}
 			r.available = true
-			s.retryPendingTasks(ctx, now.Add(time.Minute), retries)
+			s.retryPendingTasks(ctx, now.Add(time.Minute), retries, DefaultSchedulingOptions())
 			task, err = s.GetTask(ctx, &v1alpha1.GetTaskRequest{Name: "queued"})
 			if action == "delete" {
 				if err == nil {
@@ -109,7 +110,7 @@ func TestSchedulingLifecycle(t *testing.T) {
 				t.Fatalf("task=%v err=%v, want %s", task, err, want)
 			}
 			calls := r.calls
-			s.retryPendingTasks(ctx, now.Add(2*time.Minute), retries)
+			s.retryPendingTasks(ctx, now.Add(2*time.Minute), retries, DefaultSchedulingOptions())
 			if r.calls != calls {
 				t.Fatal("retried task after it left Pending")
 			}
@@ -121,29 +122,73 @@ func TestSchedulingLifecycle(t *testing.T) {
 }
 
 func TestSchedulingBackoff(t *testing.T) {
-	ctx := context.Background()
-	st := memory.NewStore()
-	t.Cleanup(func() { st.Close() })
-	task := &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "queued"}, Status: &v1alpha1.TaskStatus{Phase: "Pending", Conditions: []*v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: "WaitingForWorker"}}}}
-	if err := st.SaveTask(ctx, task); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name   string
+		opts   SchedulingOptions
+		delays []time.Duration
+	}{
+		{"defaults", DefaultSchedulingOptions(), []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 5 * time.Second, 5 * time.Second}},
+		{"custom", SchedulingOptions{200 * time.Millisecond, 750 * time.Millisecond}, []time.Duration{200 * time.Millisecond, 400 * time.Millisecond, 750 * time.Millisecond, 750 * time.Millisecond}},
+		{"constant", SchedulingOptions{time.Second, time.Second}, []time.Duration{time.Second, time.Second, time.Second}},
+		{"large durations", SchedulingOptions{time.Duration(math.MaxInt64 / 2), time.Duration(math.MaxInt64)}, []time.Duration{time.Duration(math.MaxInt64 / 2), time.Duration(math.MaxInt64 - 1), time.Duration(math.MaxInt64)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := memory.NewStore()
+			t.Cleanup(func() { st.Close() })
+			task := &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "queued"}, Status: &v1alpha1.TaskStatus{Phase: "Pending", Conditions: []*v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: "WaitingForWorker"}}}}
+			if err := st.SaveTask(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			r := &capacityReconciler{}
+			s := NewServer(st, Options{Reconciler: r})
+			retries := make(map[string]schedulingRetry)
+			now := time.Now()
+			for i, delay := range tc.delays {
+				s.retryPendingTasks(ctx, now, retries, tc.opts)
+				if r.calls != i+1 {
+					t.Fatalf("reconcile calls = %d, want %d", r.calls, i+1)
+				}
+				next := retries["default/queued"].next
+				if next.Sub(now) != delay {
+					t.Fatalf("backoff = %s, want %s", next.Sub(now), delay)
+				}
+				s.retryPendingTasks(ctx, next.Add(-time.Nanosecond), retries, tc.opts)
+				if r.calls != i+1 {
+					t.Fatal("early retry")
+				}
+				now = next
+			}
+		})
 	}
-	r := &capacityReconciler{}
-	s := NewServer(st, Options{Reconciler: r})
-	retries := make(map[string]schedulingRetry)
-	now := time.Now()
-	for _, delay := range []time.Duration{5, 10, 20, 30, 30} {
-		s.retryPendingTasks(ctx, now, retries)
-		next := retries["default/queued"].next
-		if next.Sub(now) != delay*time.Second {
-			t.Fatalf("backoff = %s, want %ds", next.Sub(now), delay)
-		}
-		calls := r.calls
-		s.retryPendingTasks(ctx, next.Add(-time.Nanosecond), retries)
-		if r.calls != calls {
-			t.Fatal("early retry")
-		}
-		now = next
+}
+
+func TestSchedulingOptionsValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		opts  SchedulingOptions
+		valid bool
+	}{
+		{"defaults", DefaultSchedulingOptions(), true},
+		{"subsecond", SchedulingOptions{50 * time.Millisecond, 250 * time.Millisecond}, true},
+		{"equal", SchedulingOptions{time.Second, time.Second}, true},
+		{"zero interval", SchedulingOptions{0, time.Second}, false},
+		{"negative interval", SchedulingOptions{-time.Second, time.Second}, false},
+		{"zero maximum", SchedulingOptions{time.Second, 0}, false},
+		{"negative maximum", SchedulingOptions{time.Second, -time.Second}, false},
+		{"maximum below interval", SchedulingOptions{2 * time.Second, time.Second}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.opts.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+			if !tc.valid {
+				s := NewServer(memory.NewStore())
+				if err := s.RetryPendingTasks(context.Background(), tc.opts); err == nil {
+					t.Fatal("retry loop accepted invalid options")
+				}
+			}
+		})
 	}
 }
 
@@ -184,7 +229,7 @@ func TestSchedulingRechecksUnderLock(t *testing.T) {
 				locker = lock.NewMemoryLocker()
 			}
 			s := NewServer(st, Options{Reconciler: r, Locker: locker})
-			s.retryPendingTasks(ctx, time.Now(), make(map[string]schedulingRetry))
+			s.retryPendingTasks(ctx, time.Now(), make(map[string]schedulingRetry), DefaultSchedulingOptions())
 			if r.calls != 0 {
 				t.Fatal("stale or canceled retry resumed a task")
 			}
@@ -208,12 +253,60 @@ func TestSchedulingCancellationPreservesPending(t *testing.T) {
 	}
 	r := &capacityReconciler{err: context.Canceled, onReconcile: cancel}
 	s := NewServer(st, Options{Reconciler: r})
-	s.retryPendingTasks(ctx, time.Now(), make(map[string]schedulingRetry))
+	s.retryPendingTasks(ctx, time.Now(), make(map[string]schedulingRetry), DefaultSchedulingOptions())
 	got, err := st.GetTask(context.Background(), "default", "queued")
 	if err != nil || !waitingForWorker(got) {
 		t.Fatalf("canceled retry lost pending task: task=%v error=%v", got, err)
 	}
 	if r.calls != 1 {
 		t.Fatalf("reconcile calls = %d, want 1", r.calls)
+	}
+}
+
+func TestSchedulingConfiguredLoop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	st := memory.NewStore()
+	t.Cleanup(func() { st.Close() })
+	task := &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "queued"},
+		Status: &v1alpha1.TaskStatus{Phase: "Pending", Conditions: []*v1alpha1.Condition{
+			{Type: "Ready", Status: "False", Reason: "WaitingForWorker"},
+		}},
+	}
+	if err := st.SaveTask(ctx, task); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	updates, closer, err := st.WatchTask(ctx, "default", "queued")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closer.Close() })
+	r := &capacityReconciler{}
+	r.onReconcile = func() { r.available = r.calls >= 2 }
+	s := NewServer(st, Options{Reconciler: r})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.RetryPendingTasks(ctx, SchedulingOptions{10 * time.Millisecond, 25 * time.Millisecond})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("retry loop: %v", err)
+		}
+	})
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("queued task did not run with configured retry timing")
+		case updated, ok := <-updates:
+			if !ok {
+				t.Fatal("watch ended before queued task ran")
+			}
+			if updated.Status.Phase == "Running" {
+				return
+			}
+		}
 	}
 }
