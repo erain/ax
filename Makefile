@@ -90,3 +90,8 @@ test:
 clean:
 	@echo "==> Cleaning build artifacts..."
 	rm -rf bin/
+
+# Live scheduling test; see test/e2e/README.md for prerequisites.
+.PHONY: test-e2e-scheduling
+test-e2e-scheduling:
+	bash test/e2e/scheduling.sh
