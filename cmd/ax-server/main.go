@@ -121,6 +121,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	retriesDone := make(chan struct{})
+	go func() {
+		defer close(retriesDone)
+		srv.RetryPendingTasks(ctx)
+	}()
+
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server failed", "error", err)
@@ -134,4 +140,5 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+	<-retriesDone
 }

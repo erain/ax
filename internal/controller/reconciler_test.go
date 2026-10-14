@@ -36,6 +36,8 @@ import (
 type mockControlServer struct {
 	ateapipb.UnimplementedControlServer
 	workerIP         string
+	createError      error
+	resumeError      error
 	createdAtespaces []string
 	createdActors    []string
 	resumedActors    []string
@@ -80,6 +82,9 @@ func (m *mockControlServer) CreateAtespace(ctx context.Context, req *ateapipb.Cr
 }
 
 func (m *mockControlServer) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
+	if m.createError != nil {
+		return nil, m.createError
+	}
 	name := ""
 	if req.Actor != nil && req.Actor.Metadata != nil {
 		name = req.Actor.Metadata.Name
@@ -97,6 +102,9 @@ func (m *mockControlServer) CreateActor(ctx context.Context, req *ateapipb.Creat
 }
 
 func (m *mockControlServer) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+	if m.resumeError != nil {
+		return nil, m.resumeError
+	}
 	name := ""
 	if req.Actor != nil {
 		name = req.Actor.Name
@@ -129,7 +137,6 @@ func (m *mockControlServer) SuspendActor(ctx context.Context, req *ateapipb.Susp
 	m.suspendedActors = append(m.suspendedActors, name)
 	return &ateapipb.SuspendActorResponse{}, nil
 }
-
 
 func (m *mockControlServer) RevertActor(_ context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
 	name := req.GetActor().GetName()
@@ -621,5 +628,47 @@ func TestEnsureActor_RevertsCrashedActor(t *testing.T) {
 	}
 	if len(mockSrv.revertedActors) != 1 || len(mockSrv.deletedActors) != 0 {
 		t.Errorf("crashed actor: reverted %v, deleted %v; want reverted only", mockSrv.revertedActors, mockSrv.deletedActors)
+	}
+}
+
+func TestTaskReconcilerSchedulingErrors(t *testing.T) {
+	for _, stage := range []string{"create", "resume"} {
+		for _, code := range []codes.Code{codes.ResourceExhausted, codes.PermissionDenied, codes.InvalidArgument} {
+			t.Run(stage+"/"+code.String(), func(t *testing.T) {
+				lis, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				mock := &mockControlServer{}
+				if stage == "create" {
+					mock.createError = status.Error(code, "capacity test")
+				} else {
+					mock.resumeError = status.Error(code, "capacity test")
+				}
+				grpcServer := grpc.NewServer()
+				ateapipb.RegisterControlServer(grpcServer, mock)
+				go grpcServer.Serve(lis)
+				t.Cleanup(grpcServer.Stop)
+				client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { client.Close() })
+				r := controller.NewTaskReconciler(client, "default-template", "default")
+				r.SecretResolver = noSecrets
+				task := &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "queued"}, Status: &v1alpha1.TaskStatus{Phase: "Running", WorkerIp: "stale-address"}}
+				got, err := r.Reconcile(context.Background(), task)
+				if code != codes.ResourceExhausted {
+					if err == nil || got.Status.Phase != "Failed" {
+						t.Fatalf("permanent error: task=%v err=%v", got, err)
+					}
+					return
+				}
+				if err != nil || got.Status.Phase != "Pending" || got.Status.WorkerIp != "" {
+					t.Fatalf("exhaustion: task=%v err=%v", got, err)
+				}
+				assertCondition(t, got, "Ready", "False", "WaitingForWorker")
+			})
+		}
 	}
 }

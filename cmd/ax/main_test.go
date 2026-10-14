@@ -212,9 +212,13 @@ func TestRunGetResourceAliases(t *testing.T) {
 
 type fakeMainReconciler struct {
 	deleted chan struct{}
+	phase   string
 }
 
 func (f *fakeMainReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, workspaces ...*v1alpha1.Workspace) (*v1alpha1.Task, error) {
+	if f.phase != "" {
+		task.Status.Phase = f.phase
+	}
 	return task, nil
 }
 
@@ -276,5 +280,45 @@ func TestRunDeleteTask(t *testing.T) {
 	_, err = s.GetTask(context.Background(), "default", "task-to-delete")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected task to be NotFound after deletion, got %v", err)
+	}
+}
+
+func TestRunResumeReportsPending(t *testing.T) {
+	for _, phase := range []string{"Pending", "Running"} {
+		t.Run(phase, func(t *testing.T) {
+			s := memory.NewStore()
+			t.Cleanup(func() { s.Close() })
+			if err := s.SaveTask(context.Background(), &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "queued"}}); err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := server.NewServer(s, server.Options{Reconciler: &fakeMainReconciler{phase: phase}}).GRPCServer()
+			t.Cleanup(srv.Stop)
+			go func() { _ = srv.Serve(listener) }()
+			output, err := os.CreateTemp(t.TempDir(), "stdout")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout := os.Stdout
+			os.Stdout = output
+			t.Cleanup(func() { os.Stdout = stdout; output.Close() })
+			if err := runResume(listener.Addr().String(), "default", []string{"queued"}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(output.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "task.ax.io/queued resumed\n"
+			if phase == "Pending" {
+				want = "task.ax.io/queued waiting for a worker\n"
+			}
+			if string(data) != want {
+				t.Fatalf("output = %q, want %q", data, want)
+			}
+		})
 	}
 }

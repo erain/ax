@@ -400,7 +400,6 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
 
-
 	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
 		if err != nil {
@@ -606,7 +605,6 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		}
 		return nil
 	}
-
 
 	task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 	if err != nil {
@@ -865,10 +863,15 @@ func runResume(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if _, err := client.ResumeTask(ctx, &v1alpha1.ResumeTaskRequest{Atespace: atespace, Name: name}); err != nil {
+	task, err := client.ResumeTask(ctx, &v1alpha1.ResumeTaskRequest{Atespace: atespace, Name: name})
+	if err != nil {
 		return fmt.Errorf("resuming task: %w", err)
 	}
 
+	if task.Status != nil && task.Status.Phase == "Pending" {
+		fmt.Printf("task.ax.io/%s waiting for a worker\n", name)
+		return nil
+	}
 	fmt.Printf("task.ax.io/%s resumed\n", name)
 	return nil
 }

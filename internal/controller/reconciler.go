@@ -184,6 +184,9 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 
 	_, err := r.client.EnsureActor(ctx, atespace, actorName, templateAtespace, templateName)
 	if err != nil {
+		if task.Status.Phase != "Suspended" && task.Status.Phase != "" && r.waitForWorker(task, err, now) {
+			return task, nil
+		}
 		r.setNotReady(task, "ActorCreationFailed", err.Error(), now)
 		task.Status.Phase = "Failed"
 		return task, fmt.Errorf("ensuring actor: %w", err)
@@ -207,6 +210,9 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 	slog.Info("resuming actor on Substrate worker", "actor", actorName)
 	_, workerIP, err := r.client.ResumeActor(ctx, atespace, actorName)
 	if err != nil {
+		if r.waitForWorker(task, err, now) {
+			return task, nil
+		}
 		r.setNotReady(task, "ActorResumeFailed", err.Error(), now)
 		task.Status.Phase = "Failed"
 		return task, fmt.Errorf("resuming actor: %w", err)
@@ -297,6 +303,17 @@ DonePolling:
 	)
 
 	return task, nil
+}
+
+// waitForWorker records capacity exhaustion without treating it as a terminal failure.
+func (r *TaskReconciler) waitForWorker(task *v1alpha1.Task, err error, now time.Time) bool {
+	if status.Code(err) != codes.ResourceExhausted {
+		return false
+	}
+	task.Status.Phase = "Pending"
+	task.Status.WorkerIp = ""
+	r.setNotReady(task, "WaitingForWorker", err.Error(), now)
+	return true
 }
 
 // Condition types reported on Task status.
