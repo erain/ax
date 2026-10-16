@@ -634,3 +634,224 @@ func TestDecodeReport(t *testing.T) {
 		t.Errorf("negative workspaceBytes err = %v", err)
 	}
 }
+
+func TestPull_RedirectIsFailureAndNotFollowed(t *testing.T) {
+	var targetHits atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer target.Close()
+
+	for _, status := range []int{http.StatusFound, http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, callerClient := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/callerClient=%v", status, callerClient), func(t *testing.T) {
+				targetHits.Store(0)
+				var runnerHits atomic.Int64
+				runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					runnerHits.Add(1)
+					http.Redirect(w, r, target.URL+"/internal-secret", status)
+				}))
+				defer runner.Close()
+				addr := runner.Listener.Addr().(*net.TCPAddr)
+
+				opts := Options{Store: usage.NewMemoryStore(), Port: addr.Port, Timeout: time.Second, Logger: quietLogger()}
+				if callerClient {
+					// A plain client follows redirects by default; New must
+					// still enforce the no-redirect policy.
+					opts.Client = &http.Client{}
+				}
+				p := New(opts)
+				err := p.Flush(context.Background(), task("t1", PhaseRunning, addr.IP.String()))
+				if err == nil {
+					t.Fatal("Flush with redirecting runner = nil, want error")
+				}
+				if n := targetHits.Load(); n != 0 {
+					t.Errorf("redirect target hit %d times, want 0", n)
+				}
+				if n := runnerHits.Load(); n != 1 {
+					t.Errorf("runner hit %d times, want 1", n)
+				}
+				if st := p.Stats(); st.Failures != 1 {
+					t.Errorf("stats = %+v, want 1 failure", st)
+				}
+				if opts.Client != nil && opts.Client.CheckRedirect != nil {
+					t.Error("caller's client was mutated")
+				}
+			})
+		}
+	}
+}
+
+// countingTransport records every request that reaches the transport.
+type countingTransport struct{ n atomic.Int64 }
+
+func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	c.n.Add(1)
+	return nil, errors.New("countingTransport: no network")
+}
+
+func TestPull_RejectsInvalidWorkerIP(t *testing.T) {
+	for _, ip := range []string{
+		"localhost",
+		"example.com",
+		"metadata.google.internal",
+		"169.254.169.254",
+		"169.254.1.1",
+		"::ffff:169.254.169.254",
+		"fe80::1",
+		"fe80::1%eth0",
+		"0.0.0.0",
+		"::",
+		"224.0.0.1",
+		"ff02::1",
+		"10.0.0.1:80",
+		"10.0.0.1/24",
+		"http://10.0.0.1",
+	} {
+		t.Run(ip, func(t *testing.T) {
+			rt := &countingTransport{}
+			store := usage.NewMemoryStore()
+			p := New(Options{
+				Tasks:  &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, ip)}},
+				Store:  store,
+				Client: &http.Client{Transport: rt},
+				Logger: quietLogger(),
+			})
+			p.Sweep(context.Background())
+			err := p.Flush(context.Background(), task("t1", PhaseRunning, ip))
+			if !errors.Is(err, errBadWorkerIP) {
+				t.Errorf("Flush = %v, want errBadWorkerIP", err)
+			}
+			if n := rt.n.Load(); n != 0 {
+				t.Errorf("transport saw %d requests, want 0", n)
+			}
+			if st := p.Stats(); st.Failures != 2 || st.Pulls != 2 {
+				t.Errorf("stats = %+v, want 2 failed pulls", st)
+			}
+			if all, _ := store.List(context.Background(), ""); len(all) != 0 {
+				t.Errorf("store has %d records, want 0", len(all))
+			}
+		})
+	}
+}
+
+func TestCheckWorkerIP_Allowed(t *testing.T) {
+	for _, ip := range []string{"10.8.0.12", "127.0.0.1", "::1", "2600:1900::1", "fd00::5", "::ffff:10.0.0.1"} {
+		if _, err := checkWorkerIP(ip); err != nil {
+			t.Errorf("checkWorkerIP(%q) = %v, want nil", ip, err)
+		}
+	}
+}
+
+func TestPull_FutureReportTimeIsClamped(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	store := usage.NewMemoryStore()
+	lister := &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}}
+	now := t0
+	p := New(Options{
+		Tasks: lister, Store: store, Port: f.port, Timeout: 2 * time.Second,
+		Now: func() time.Time { return now }, Logger: quietLogger(),
+	})
+	key := usage.Key{Atespace: "default", Name: "t1"}
+
+	// A sandbox claiming a reportTime a year ahead.
+	f.set(http.StatusOK, reportJSON(t, "s1", t0.Add(365*24*time.Hour), map[string]map[string]any{"m": {"input": 100}}))
+	p.Sweep(ctx)
+	u, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.State.RunnerReportTime; !got.Equal(t0) {
+		t.Errorf("RunnerReportTime = %v, want clamped to now %v", got, t0)
+	}
+
+	// Later honest reports are still applied.
+	now = t0.Add(time.Minute)
+	f.set(http.StatusOK, reportJSON(t, "s1", now, map[string]map[string]any{"m": {"input": 250}}))
+	p.Sweep(ctx)
+	if u, err = store.Get(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Tokens["m"].Input; got != 250 {
+		t.Errorf("input tokens = %d, want 250", got)
+	}
+
+	// Within the allowed skew the runner's time is kept.
+	now = t0.Add(2 * time.Minute)
+	skewed := now.Add(MaxClockSkew - time.Second)
+	f.set(http.StatusOK, reportJSON(t, "s1", skewed, map[string]map[string]any{"m": {"input": 300}}))
+	p.Sweep(ctx)
+	if u, err = store.Get(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if got := u.State.RunnerReportTime; !got.Equal(skewed) {
+		t.Errorf("RunnerReportTime = %v, want %v", got, skewed)
+	}
+}
+
+// ctxHooks records whether the hook context was usable.
+type ctxHooks struct {
+	mu       sync.Mutex
+	err      error
+	deadline time.Duration
+}
+
+func (h *ctxHooks) OnDelta(ctx context.Context, _ usage.Key, _ usage.Delta, _ usage.Cost, _ *usage.TaskUsage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.err = ctx.Err()
+	if dl, ok := ctx.Deadline(); ok {
+		h.deadline = time.Until(dl)
+	}
+}
+
+func TestPull_HooksGetFreshContext(t *testing.T) {
+	f := newFakeRunner(t)
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	hooks := &ctxHooks{}
+	p := New(Options{Store: usage.NewMemoryStore(), Hooks: hooks, Port: f.port, Timeout: time.Second,
+		Now: func() time.Time { return t0 }, Logger: quietLogger()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := p.Flush(ctx, task("t1", PhaseRunning, f.ip)); err != nil {
+		t.Fatal(err)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.err != nil {
+		t.Errorf("hook ctx err = %v, want nil", hooks.err)
+	}
+	if hooks.deadline <= time.Second || hooks.deadline > hookTimeout {
+		t.Errorf("hook ctx deadline in %v, want (Timeout, hookTimeout]", hooks.deadline)
+	}
+}
+
+func TestPull_StateOnlyChangeIsPersisted(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	store := usage.NewMemoryStore()
+	hooks := &recHooks{}
+	lister := &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}}
+	p := newTestPuller(f, lister, store, nil, hooks)
+	key := usage.Key{Atespace: "default", Name: "t1"}
+
+	tok := map[string]map[string]any{"m": {"input": 10}}
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, tok))
+	p.Sweep(ctx)
+	// Same tokens, but the command exited: zero Delta, state advanced.
+	f.set(http.StatusOK, strings.Replace(reportJSON(t, "s1", t0.Add(time.Minute), tok), `"commandExited":false`, `"commandExited":true`, 1))
+	p.Sweep(ctx)
+	u, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.State.CommandExited || !u.State.RunnerReportTime.Equal(t0.Add(time.Minute)) {
+		t.Errorf("state = %+v, want commandExited and advanced reportTime persisted", u.State)
+	}
+	if n := len(hooks.snapshot()); n != 1 {
+		t.Errorf("hook calls = %d, want 1 (zero deltas do not fire hooks)", n)
+	}
+}

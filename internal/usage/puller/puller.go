@@ -18,6 +18,7 @@
 package puller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,7 +27,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +50,13 @@ const (
 	// PhaseRunning is the only task phase whose runner is contacted.
 	PhaseRunning = "Running"
 
+	// MaxClockSkew is how far in the future a runner reportTime may be; a
+	// later one is replaced by the pull time so a skewed or malicious sandbox
+	// cannot freeze its runner accounting.
+	MaxClockSkew = 2 * time.Minute
+	// hookTimeout bounds one Hooks.OnDelta call.
+	hookTimeout = 5 * time.Second
+
 	// maxReportBytes caps the size of a usage report body.
 	maxReportBytes = 1 << 20
 )
@@ -70,7 +78,10 @@ type Options struct {
 	Pricer usage.Pricer
 	// Hooks is notified of every non-zero increment; may be nil.
 	Hooks usage.Hooks
-	// Client performs the HTTP requests; defaults to a fresh http.Client.
+	// Client performs the HTTP requests. The default uses a dedicated
+	// transport without proxy. A supplied client is copied and its
+	// CheckRedirect is always replaced so redirects are never followed (a
+	// 3xx counts as a failed pull); its Transport is used as is.
 	Client *http.Client
 	// Interval is the sweep period (default 60s).
 	Interval time.Duration
@@ -108,12 +119,18 @@ type Puller struct {
 // New returns a Puller with defaults applied.
 func New(o Options) *Puller {
 	if o.Client == nil {
-		o.Client = &http.Client{}
+		o.Client = &http.Client{Transport: newTransport()}
+	} else {
+		c := *o.Client
+		o.Client = &c
 	}
+	// The runner lives in the sandbox next to untrusted code: never let it
+	// steer ax-server's request elsewhere.
+	o.Client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if o.Interval <= 0 {
 		o.Interval = DefaultInterval
 	}
-	if o.Port <= 0 {
+	if o.Port <= 0 || o.Port > 65535 {
 		o.Port = DefaultPort
 	}
 	if o.Timeout <= 0 {
@@ -129,6 +146,20 @@ func New(o Options) *Puller {
 		o.Logger = slog.Default()
 	}
 	return &Puller{o: o}
+}
+
+// newTransport returns a transport for direct pod-IP pulls: no proxy, small
+// idle pool, bounded handshakes.
+func newTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: DefaultTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   1,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: DefaultTimeout,
+		DisableCompression:    true,
+	}
 }
 
 // Stats returns a snapshot of the counters.
@@ -223,8 +254,8 @@ func pullable(task *v1alpha1.Task) bool {
 		task.GetStatus().GetWorkerIp() != ""
 }
 
-func (p *Puller) pull(ctx context.Context, task *v1alpha1.Task) error {
-	ctx, cancel := context.WithTimeout(ctx, p.o.Timeout)
+func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) error {
+	ctx, cancel := context.WithTimeout(parent, p.o.Timeout)
 	defer cancel()
 
 	r, err := p.fetch(ctx, task.GetStatus().GetWorkerIp())
@@ -232,6 +263,9 @@ func (p *Puller) pull(ctx context.Context, task *v1alpha1.Task) error {
 		return err
 	}
 	now := p.o.Now()
+	if r.ReportTime.After(now.Add(MaxClockSkew)) {
+		r.ReportTime = now
+	}
 	key := usage.Key{Atespace: task.GetMetadata().GetAtespace(), Name: task.GetMetadata().GetName()}
 
 	var (
@@ -241,13 +275,24 @@ func (p *Puller) pull(ctx context.Context, task *v1alpha1.Task) error {
 	)
 	err = p.o.Store.Update(ctx, key, func(tu *usage.TaskUsage) error {
 		d, c, u = usage.Delta{}, usage.Cost{}, nil
-		prevReport := tu.State.RunnerReportTime
-		d = tu.ApplyRunnerReport(r, now)
-		if d.IsZero() && tu.State.RunnerReportTime.Equal(prevReport) {
-			return usage.ErrNoChange // stale or duplicate report
+		before, err := json.Marshal(tu)
+		if err != nil {
+			return err
 		}
+		d = tu.ApplyRunnerReport(r, now)
 		c = tu.ChargeDelta(d, p.o.Pricer, tu.State.Pool)
 		u = tu
+		// Apply* may advance accounting state with a zero Delta, so the
+		// record is persisted unless it is byte-identical.
+		if d.IsZero() {
+			after, err := json.Marshal(tu)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(before, after) {
+				return usage.ErrNoChange
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -258,7 +303,11 @@ func (p *Puller) pull(ctx context.Context, task *v1alpha1.Task) error {
 	}
 	p.applied.Add(1)
 	if p.o.Hooks != nil && u != nil {
-		p.o.Hooks.OnDelta(ctx, key, d, c, u)
+		// Hooks get their own budget: the pull's deadline may be nearly
+		// spent, and a canceled caller must not drop a committed delta.
+		hctx, hcancel := context.WithTimeout(context.WithoutCancel(parent), hookTimeout)
+		defer hcancel()
+		p.o.Hooks.OnDelta(hctx, key, d, c, u)
 	}
 	return nil
 }
@@ -285,8 +334,33 @@ type tokenReport struct {
 
 var errBadReport = errors.New("invalid usage report")
 
+var errBadWorkerIP = errors.New("invalid worker IP")
+
+// checkWorkerIP accepts only literal unicast IPs; hostnames, unspecified,
+// link-local (169.254.0.0/16 incl. the metadata server, fe80::/10), multicast
+// and zoned addresses are rejected. Loopback is allowed (tests).
+func checkWorkerIP(s string) (netip.Addr, error) {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("%w %q: %v", errBadWorkerIP, s, err)
+	}
+	if a.Zone() != "" {
+		return netip.Addr{}, fmt.Errorf("%w %q: zoned address", errBadWorkerIP, s)
+	}
+	a = a.Unmap()
+	if a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
+		a.IsInterfaceLocalMulticast() || a.IsMulticast() {
+		return netip.Addr{}, fmt.Errorf("%w %q: not a routable unicast address", errBadWorkerIP, s)
+	}
+	return a, nil
+}
+
 func (p *Puller) fetch(ctx context.Context, workerIP string) (usage.RunnerReport, error) {
-	url := "http://" + net.JoinHostPort(workerIP, strconv.Itoa(p.o.Port)) + UsagePath
+	addr, err := checkWorkerIP(workerIP)
+	if err != nil {
+		return usage.RunnerReport{}, err
+	}
+	url := "http://" + netip.AddrPortFrom(addr, uint16(p.o.Port)).String() + UsagePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return usage.RunnerReport{}, fmt.Errorf("building request: %w", err)
