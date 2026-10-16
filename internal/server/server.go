@@ -25,6 +25,7 @@ import (
 	"github.com/google/ax/internal/lock"
 	"github.com/google/ax/internal/store"
 	"github.com/google/ax/internal/substrate"
+	"github.com/google/ax/internal/usage/metrics"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,6 +44,8 @@ type Reconciler interface {
 type Options struct {
 	Locker     lock.Locker
 	Reconciler Reconciler
+	// Usage enables usage accounting, budgets and metrics (nil = disabled).
+	Usage *UsageOptions
 }
 
 // Server provides the gRPC API for AX.
@@ -52,6 +55,7 @@ type Server struct {
 	locker     lock.Locker
 	reconciler Reconciler
 	grpcServer *grpc.Server
+	fin        *finops // nil when usage accounting is disabled
 }
 
 // NewServer creates a new AX API server.
@@ -70,6 +74,9 @@ func NewServer(s store.Store, opts ...Options) *Server {
 		locker:     locker,
 		reconciler: opt.Reconciler,
 		grpcServer: grpc.NewServer(),
+	}
+	if opt.Usage != nil && opt.Usage.Store != nil {
+		srv.fin = newFinops(srv, opt.Usage)
 	}
 	v1alpha1.RegisterAXServer(srv.grpcServer, srv)
 	return srv
@@ -115,6 +122,7 @@ func (s *Server) GetTask(ctx context.Context, req *v1alpha1.GetTaskRequest) (*v1
 		}
 		return nil, status.Errorf(codes.Internal, "getting task: %v", err)
 	}
+	s.attachUsage(ctx, task)
 	return task, nil
 }
 
@@ -140,6 +148,7 @@ func (s *Server) ListTasks(ctx context.Context, req *v1alpha1.ListTasksRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing tasks: %v", err)
 	}
+	s.attachUsageList(ctx, atespace, tasks)
 	return &v1alpha1.ListTasksResponse{Tasks: tasks}, nil
 }
 
@@ -188,6 +197,12 @@ func (s *Server) CreateTask(ctx context.Context, req *v1alpha1.CreateTaskRequest
 	if task.Status == nil {
 		task.Status = &v1alpha1.TaskStatus{}
 	}
+	// status.usage is merged at read time and never stored; the actor uid of
+	// a new task is assigned by the reconciler, never by the client.
+	task.Status.Usage = nil
+	if errors.Is(err, store.ErrNotFound) {
+		task.Status.ActorUid = ""
+	}
 	task.Status.Phase = "Suspended"
 	if err := s.store.SaveTask(ctx, task); err != nil {
 		return nil, status.Errorf(codes.Internal, "saving task: %v", err)
@@ -232,6 +247,10 @@ func (s *Server) DeleteTask(ctx context.Context, req *v1alpha1.DeleteTaskRequest
 	}
 	taskName := req.Name
 
+	// Pull the runner's final usage while the task still runs. This happens
+	// before taking the task lock: the usage hooks it triggers take it.
+	s.flushBeforeLock(ctx, atespace, taskName)
+
 	// Acquire exclusive lock for this task
 	unlock, err := s.locker.Lock(ctx, "task", atespace, taskName)
 	if err != nil {
@@ -272,9 +291,20 @@ func (s *Server) DeleteTask(ctx context.Context, req *v1alpha1.DeleteTaskRequest
 		}
 	}
 
+	// Final usage summary, then the task record, then the usage record: late
+	// actor events arriving in between find no task and are dropped instead
+	// of recreating an orphan usage record.
+	if s.fin != nil {
+		u, err := s.fin.get(ctx, keyOf(task))
+		if err != nil {
+			s.fin.logger.WarnContext(ctx, "reading task usage for the delete summary failed", "atespace", atespace, "task", taskName, "error", err)
+		}
+		s.logSummary(ctx, metrics.ReasonDelete, task, u)
+	}
 	if err := s.store.DeleteTask(ctx, atespace, taskName); err != nil {
 		return nil, status.Errorf(codes.Internal, "deleting task record: %v", err)
 	}
+	s.deleteUsage(ctx, atespace, taskName)
 	return &v1alpha1.DeleteTaskResponse{}, nil
 }
 
@@ -287,6 +317,10 @@ func (s *Server) SuspendTask(ctx context.Context, req *v1alpha1.SuspendTaskReque
 		atespace = "default"
 	}
 	taskName := req.Name
+
+	// Pull the runner's latest usage before the sandbox is checkpointed (and
+	// before taking the task lock: the usage hooks it triggers take it).
+	s.flushBeforeLock(ctx, atespace, taskName)
 
 	// Acquire exclusive lock for this task
 	unlock, err := s.locker.Lock(ctx, "task", atespace, taskName)
@@ -317,16 +351,20 @@ func (s *Server) SuspendTask(ctx context.Context, req *v1alpha1.SuspendTaskReque
 			return nil, status.Errorf(codes.Internal, "suspending task on substrate: %v", err)
 		}
 		task.Status = reconciled.Status
+		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.UpdateTaskStatus(ctx, atespace, taskName, task.Status); err != nil {
 			return nil, status.Errorf(codes.Internal, "updating task status: %v", err)
 		}
+		s.afterSuspend(ctx, task, ev)
 	} else {
+		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.SaveTask(ctx, task); err != nil {
 			return nil, status.Errorf(codes.Internal, "suspending task: %v", err)
 		}
+		s.afterSuspend(ctx, task, ev)
 	}
 
-	return task, nil
+	return s.withUsage(ctx, task), nil
 }
 
 func (s *Server) ResumeTask(ctx context.Context, req *v1alpha1.ResumeTaskRequest) (*v1alpha1.Task, error) {
@@ -370,23 +408,30 @@ func (s *Server) ResumeTask(ctx context.Context, req *v1alpha1.ResumeTaskRequest
 			} else if task.Status.Phase != "Pending" {
 				task.Status.Phase = "Failed"
 			}
-			_ = s.store.UpdateTaskStatus(ctx, atespace, taskName, task.Status)
+			ev := s.evaluateLocked(ctx, task)
+			if s.store.UpdateTaskStatus(ctx, atespace, taskName, task.Status) == nil {
+				s.emitCrossings(ctx, task, ev)
+			}
 			if substrate.IsTransientError(err) {
 				return nil, status.Errorf(codes.Unavailable, "resuming task on substrate: %v", err)
 			}
 			return nil, status.Errorf(codes.Internal, "resuming task on substrate: %v", err)
 		}
 		task.Status = reconciled.Status
+		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.UpdateTaskStatus(ctx, atespace, taskName, task.Status); err != nil {
 			return nil, status.Errorf(codes.Internal, "updating task status: %v", err)
 		}
+		s.emitCrossings(ctx, task, ev)
 	} else {
+		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.SaveTask(ctx, task); err != nil {
 			return nil, status.Errorf(codes.Internal, "resuming task: %v", err)
 		}
+		s.emitCrossings(ctx, task, ev)
 	}
 
-	return task, nil
+	return s.withUsage(ctx, task), nil
 }
 
 func (s *Server) fetchWorkspaces(ctx context.Context, atespace string, task *v1alpha1.Task) []*v1alpha1.Workspace {
@@ -421,6 +466,7 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 	defer closer.Close()
 
 	if initial, err := s.store.GetTask(ctx, atespace, req.Name); err == nil {
+		s.attachUsage(ctx, initial)
 		if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: initial, Action: "INITIAL"}); err != nil {
 			return err
 		}
@@ -434,6 +480,9 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 			if !ok {
 				return nil
 			}
+			// Watch channels may share one message between watchers: merge
+			// usage into a copy.
+			task = s.withUsage(ctx, task)
 			if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: task, Action: "MODIFIED"}); err != nil {
 				return err
 			}

@@ -56,6 +56,9 @@ type mockControlServer struct {
 	revertedActors    []string
 }
 
+// mockActorUID is the uid the mock Substrate assigns to an actor.
+func mockActorUID(name string) string { return "uid-" + name }
+
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
 func noSecrets(context.Context, string, string, string) (string, error) {
 	return "", nil
@@ -104,7 +107,7 @@ func (m *mockControlServer) CreateActor(ctx context.Context, req *ateapipb.Creat
 	}
 	m.createdActors = append(m.createdActors, name)
 	return &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Name: name},
+		Metadata: &ateapipb.ResourceMetadata{Name: name, Uid: mockActorUID(name)},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
@@ -126,7 +129,7 @@ func (m *mockControlServer) ResumeActor(ctx context.Context, req *ateapipb.Resum
 	}
 	return &ateapipb.ResumeActorResponse{
 		Actor: &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Name: name},
+			Metadata: &ateapipb.ResourceMetadata{Name: name, Uid: mockActorUID(name)},
 			Status: &ateapipb.ActorStatus{
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -251,7 +254,7 @@ func TestTaskReconciler(t *testing.T) {
 		},
 		// A client-supplied actor name must not survive: the actor is always
 		// named after the task.
-		Status: &v1alpha1.TaskStatus{Actor: "not-the-task", Phase: "Running"},
+		Status: &v1alpha1.TaskStatus{Actor: "not-the-task", Phase: "Running", ActorUid: "stale-uid"},
 	}
 
 	reconciled, err := reconciler.Reconcile(ctx, task)
@@ -268,6 +271,10 @@ func TestTaskReconciler(t *testing.T) {
 	}
 	if reconciled.Status.WorkerIp != "10.244.1.42" {
 		t.Errorf("expected worker IP '10.244.1.42', got %q", reconciled.Status.WorkerIp)
+	}
+	// The actor uid comes from Substrate (EnsureActor/ResumeActor responses).
+	if got, want := reconciled.Status.ActorUid, mockActorUID("test-task"); got != want {
+		t.Errorf("actorUid = %q, want %q", got, want)
 	}
 
 	// Verify mock was called
@@ -902,5 +909,42 @@ func TestTaskReconciler_LabelsStayOutOfSandbox(t *testing.T) {
 	// Reconcile must not strip the caller's labels.
 	if len(task.GetMetadata().GetLabels()) != 2 {
 		t.Errorf("Reconcile mutated task labels: %v", task.GetMetadata().GetLabels())
+	}
+}
+
+func TestTaskReconciler_DefaultImage(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+	mockSrv := &mockControlServer{}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", v1alpha1.DefaultSystemNamespace)
+	reconciler.SecretResolver = noSecrets
+	reconciler.DefaultImage = "registry.example.com/ax-task-runner:poc"
+	task := &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "no-image", Atespace: "default"},
+		Spec:     &v1alpha1.TaskSpec{},
+		Status:   &v1alpha1.TaskStatus{Phase: "Suspended"},
+	}
+	reconciled, err := reconciler.Reconcile(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := reconciled.GetSpec().GetImage(); got != reconciler.DefaultImage {
+		t.Errorf("spec.image = %q, want the reconciler default %q", got, reconciler.DefaultImage)
+	}
+	if got, want := reconciled.GetStatus().GetActorUid(), mockActorUID("no-image"); got != want {
+		t.Errorf("actorUid = %q, want %q (from EnsureActor)", got, want)
 	}
 }
