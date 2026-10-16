@@ -228,8 +228,8 @@ func (d Delta) Dates() []string {
 // which do not care about day boundaries).
 func (d Delta) Sum() DayDelta {
 	var s DayDelta
-	for _, dd := range d.Days {
-		if dd != nil {
+	for _, date := range d.Dates() {
+		if dd := d.Days[date]; dd != nil {
 			s.Add(*dd)
 		}
 	}
@@ -238,11 +238,10 @@ func (d Delta) Sum() DayDelta {
 
 // Add merges o into d (e.g. to accumulate the deltas of a batch of events).
 func (d *Delta) Add(o Delta) {
-	for date, dd := range o.Days {
-		if dd == nil || dd.IsZero() {
-			continue
+	for _, date := range o.Dates() {
+		if dd := o.Days[date]; dd != nil && !dd.IsZero() {
+			d.day(date).Add(*dd)
 		}
-		d.day(date).Add(*dd)
 	}
 }
 
@@ -340,8 +339,13 @@ type AccountingState struct {
 	StateTime time.Time `json:"stateTime,omitzero"`
 	// ActiveSince is the start of the open RUNNING interval (zero = closed).
 	ActiveSince time.Time `json:"activeSince,omitzero"`
-	// ActiveAccruedTo is how far the open interval was already accounted.
-	ActiveAccruedTo time.Time `json:"activeAccruedTo,omitzero"`
+	// [ActiveCoveredFrom, ActiveAccruedTo] is the latest contiguous range
+	// already accounted as active. ActiveAccruedTo is a high-water mark: it
+	// survives closing the interval, so late state events whose times fall
+	// inside that range (samples and state events travel separate pipelines
+	// and may arrive in either order) never count the same time twice.
+	ActiveCoveredFrom time.Time `json:"activeCoveredFrom,omitzero"`
+	ActiveAccruedTo   time.Time `json:"activeAccruedTo,omitzero"`
 	// IdleStreakStart is the start of the current low-cpu streak (zero = none).
 	IdleStreakStart time.Time `json:"idleStreakStart,omitzero"`
 
@@ -409,10 +413,12 @@ func (u *TaskUsage) ChargeDelta(d Delta, p Pricer, pool string) Cost {
 	return total
 }
 
-// commit adds d's amounts into the lifetime totals and day buckets.
+// commit adds d's amounts into the lifetime totals and day buckets, in date
+// order so float sums are deterministic.
 func (u *TaskUsage) commit(d *Delta) {
 	d.prune()
-	for date, dd := range d.Days {
+	for _, date := range d.Dates() {
+		dd := d.Days[date]
 		u.Amounts.Add(dd.Amounts)
 		u.day(date).Amounts.Add(dd.Amounts)
 	}

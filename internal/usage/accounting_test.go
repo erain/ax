@@ -499,3 +499,75 @@ func TestAccounting_EpochPruning(t *testing.T) {
 		t.Errorf("pruned epoch replay produced %+v", d.Sum())
 	}
 }
+
+// Regression (verifier D1): samples arriving before the late state events
+// must not double count active time.
+//
+// Arrival order: samples at 10s, 70s, 130s (state unknown, so the first
+// sample opens the interval at 10s and the next two accrue [10s, 130s]); then
+// the late events resuming@0s (closes; nothing to add) and running@8s; then
+// sample@190s and suspending@200s. The actor was really RUNNING from 8s to
+// 200s, so the exact answer is 200 - 8 = 192s: [10,130] from the samples,
+// [8,10] added when the late RUNNING extends the covered range back,
+// [130,190] from the sample and [190,200] at close. Before the fix this gave
+// 312s, because reopening at 8s reset the accrual mark and recounted [8,130].
+func TestAccounting_ActiveLateStateEventsNoDoubleCount(t *testing.T) {
+	u := NewTaskUsage()
+	cfg := AccountingConfig{}
+	for _, sec := range []float64{10, 70, 130} {
+		u.ApplyUsageSample(UsageSample{Time: at(sec), Epoch: 1, CPUSeconds: f64(sec / 10)}, cfg)
+	}
+	u.ApplyStateChange(StateChange{Time: at(0), State: "resuming"})
+	u.ApplyStateChange(StateChange{Time: at(8), State: "running"})
+	u.ApplyUsageSample(UsageSample{Time: at(190), Epoch: 1, CPUSeconds: f64(19)}, cfg)
+	u.ApplyStateChange(StateChange{Time: at(200), State: "suspending"})
+	approx(t, "ActiveSeconds", u.ActiveSeconds, 192)
+	approx(t, "day ActiveSeconds", u.Day(DateOf(t0)).ActiveSeconds, 192)
+
+	// A later activation (past the high-water mark) starts a fresh range.
+	u.ApplyStateChange(StateChange{Time: at(1000), State: "running"})
+	u.ApplyStateChange(StateChange{Time: at(1100), State: "suspended"})
+	approx(t, "ActiveSeconds after second activation", u.ActiveSeconds, 292)
+}
+
+// Regression (verifier D2): a late sample of an older epoch must not start
+// the low-cpu streak of the current epoch.
+func TestAccounting_IdleStreakIgnoresOlderEpochs(t *testing.T) {
+	u := NewTaskUsage()
+	cfg := AccountingConfig{}
+	e1, e2 := int64(1000), int64(2000)
+	u.ApplyUsageSample(UsageSample{Time: at(0), Epoch: e1, CPUSeconds: f64(0), WorkingSetBytes: i64(oneGiB)}, cfg)
+	// E2 starts at 710s.
+	u.ApplyUsageSample(UsageSample{Time: at(710), Epoch: e2, CPUSeconds: f64(0), WorkingSetBytes: i64(oneGiB)}, cfg)
+	// E1's final sample (700s, low cpu over [0,700]) arrives late.
+	d := u.ApplyUsageSample(UsageSample{Time: at(700), Epoch: e1, Kind: "final", CPUSeconds: f64(0.1), WorkingSetBytes: i64(oneGiB)}, cfg)
+	approx(t, "late E1 cpu", d.Sum().CPUSeconds, 0.1)
+	approx(t, "late E1 memory (capped 120s)", d.Sum().MemoryGiBSeconds, 120)
+	approx(t, "late E1 idle", d.Sum().IdleSeconds, 0)
+	if !u.State.IdleStreakStart.IsZero() {
+		t.Errorf("IdleStreakStart = %v, want zero", u.State.IdleStreakStart)
+	}
+	// E2's first low interval [710,770] is only the start of a streak.
+	d = u.ApplyUsageSample(UsageSample{Time: at(770), Epoch: e2, CPUSeconds: f64(0), WorkingSetBytes: i64(oneGiB)}, cfg)
+	approx(t, "E2 first low interval idle", d.Sum().IdleSeconds, 0)
+	if !u.State.IdleStreakStart.Equal(at(710)) {
+		t.Errorf("IdleStreakStart = %v, want %v", u.State.IdleStreakStart, at(710))
+	}
+}
+
+// Apply* may advance state with a zero Delta; callers must still persist.
+func TestAccounting_ZeroDeltaStillAdvancesState(t *testing.T) {
+	u := NewTaskUsage()
+	if d := u.ApplyStateChange(StateChange{Time: at(0), ActorUID: "a", State: "running"}); !d.IsZero() {
+		t.Fatalf("first RUNNING delta = %+v", d.Sum())
+	}
+	if u.State.ActorUID != "a" || u.State.ActiveSince.IsZero() {
+		t.Errorf("state not advanced: %+v", u.State)
+	}
+	if d := u.ApplyRunnerReport(RunnerReport{Session: "s", ReportTime: at(5)}, at(6)); !d.IsZero() {
+		t.Fatalf("empty report delta = %+v", d.Sum())
+	}
+	if u.State.RunnerSession != "s" || !u.State.LastPullTime.Equal(at(6)) {
+		t.Errorf("runner state not advanced: %+v", u.State)
+	}
+}
