@@ -229,8 +229,10 @@ Available Commands:
   delete task <name>      Delete a task
   delete workspace <name> Delete a workspace
   delete model <name>     Delete a model
-  cost summary [--by <label>] [-l k=v,...] [-o table|json]
+  cost summary [--by <label>] [-l k=v,...] [--start D] [--end D] [-o table|json]
                           Roll up usage and cost by a task label (default "agent")
+  cost export [--format focus-csv|json] [-l k=v,...] [--start D] [--end D] [-o file]
+                          Export FOCUS cost rows per task, day and charge
   ctx, context            Show active Kubernetes context and AX connection
   tunnel <list|stop>      Manage background tunnels to Kubernetes clusters
   version                 Print AX version

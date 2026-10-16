@@ -2471,7 +2471,8 @@ type ListUsageRequest struct {
 	// label_selector has the same syntax as ListTasksRequest.label_selector.
 	LabelSelector string `protobuf:"bytes,2,opt,name=label_selector,json=labelSelector,proto3" json:"label_selector,omitempty"`
 	// start_date and end_date bound the UTC days returned, as YYYY-MM-DD,
-	// inclusive. Empty means unbounded.
+	// inclusive. An empty end_date means today (UTC); an empty start_date
+	// means 29 days before end_date, so the default is the last 30 days.
 	StartDate     string `protobuf:"bytes,3,opt,name=start_date,json=startDate,proto3" json:"start_date,omitempty"`
 	EndDate       string `protobuf:"bytes,4,opt,name=end_date,json=endDate,proto3" json:"end_date,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2596,8 +2597,12 @@ type DailyUsage struct {
 	StorageGibSeconds float64            `protobuf:"fixed64,10,opt,name=storage_gib_seconds,json=storageGibSeconds,proto3" json:"storage_gib_seconds,omitempty"`
 	Tokens            []*ModelTokenUsage `protobuf:"bytes,11,rep,name=tokens,proto3" json:"tokens,omitempty"`
 	Cost              *CostBreakdown     `protobuf:"bytes,12,opt,name=cost,proto3" json:"cost,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// charges split cost into priced components (compute as vCPU and memory,
+	// tokens per model and token type, storage). Their costs sum to
+	// cost.total.
+	Charges       []*UsageCharge `protobuf:"bytes,13,rep,name=charges,proto3" json:"charges,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DailyUsage) Reset() {
@@ -2714,6 +2719,148 @@ func (x *DailyUsage) GetCost() *CostBreakdown {
 	return nil
 }
 
+func (x *DailyUsage) GetCharges() []*UsageCharge {
+	if x != nil {
+		return x.Charges
+	}
+	return nil
+}
+
+// UsageCharge is one priced component of a DailyUsage, e.g. one FOCUS row.
+type UsageCharge struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// kind is "cpu", "memory", "tokens" or "storage".
+	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	// model is set for tokens.
+	Model string `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	// token_type is set for tokens: "input" (uncached input), "cache_read",
+	// "cache_write", "output" (excluding reasoning) or "reasoning". Following
+	// the OTel GenAI conventions, ModelTokenUsage.input includes cache reads
+	// and writes and output includes reasoning; the charge quantities do not
+	// overlap.
+	TokenType string `protobuf:"bytes,3,opt,name=token_type,json=tokenType,proto3" json:"token_type,omitempty"`
+	// quantity is the amount consumed, in unit ("vCPU-Hours", "GiB-Hours",
+	// "Tokens" or "GiB-Months").
+	Quantity float64 `protobuf:"fixed64,4,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	Unit     string  `protobuf:"bytes,5,opt,name=unit,proto3" json:"unit,omitempty"`
+	// pricing_quantity is quantity in pricing_unit ("1M Tokens" for tokens,
+	// otherwise the same as unit).
+	PricingQuantity float64 `protobuf:"fixed64,6,opt,name=pricing_quantity,json=pricingQuantity,proto3" json:"pricing_quantity,omitempty"`
+	PricingUnit     string  `protobuf:"bytes,7,opt,name=pricing_unit,json=pricingUnit,proto3" json:"pricing_unit,omitempty"`
+	// list_unit_price is the current rate card price per pricing_unit. It is
+	// unset when the rate card has no price (no rate card, unknown model).
+	ListUnitPrice *float64 `protobuf:"fixed64,8,opt,name=list_unit_price,json=listUnitPrice,proto3,oneof" json:"list_unit_price,omitempty"`
+	// cost is this component's share of the frozen day cost: cost.compute,
+	// cost.tokens and cost.storage are split over their components in
+	// proportion to their current list-price cost, which is exact unless the
+	// rate card changed or a provider-reported cost was used.
+	Cost float64 `protobuf:"fixed64,9,opt,name=cost,proto3" json:"cost,omitempty"`
+	// idle_cost is the part of cost consumed while idle (cpu and memory).
+	IdleCost      float64 `protobuf:"fixed64,10,opt,name=idle_cost,json=idleCost,proto3" json:"idle_cost,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UsageCharge) Reset() {
+	*x = UsageCharge{}
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UsageCharge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UsageCharge) ProtoMessage() {}
+
+func (x *UsageCharge) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UsageCharge.ProtoReflect.Descriptor instead.
+func (*UsageCharge) Descriptor() ([]byte, []int) {
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *UsageCharge) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *UsageCharge) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *UsageCharge) GetTokenType() string {
+	if x != nil {
+		return x.TokenType
+	}
+	return ""
+}
+
+func (x *UsageCharge) GetQuantity() float64 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+func (x *UsageCharge) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+func (x *UsageCharge) GetPricingQuantity() float64 {
+	if x != nil {
+		return x.PricingQuantity
+	}
+	return 0
+}
+
+func (x *UsageCharge) GetPricingUnit() string {
+	if x != nil {
+		return x.PricingUnit
+	}
+	return ""
+}
+
+func (x *UsageCharge) GetListUnitPrice() float64 {
+	if x != nil && x.ListUnitPrice != nil {
+		return *x.ListUnitPrice
+	}
+	return 0
+}
+
+func (x *UsageCharge) GetCost() float64 {
+	if x != nil {
+		return x.Cost
+	}
+	return 0
+}
+
+func (x *UsageCharge) GetIdleCost() float64 {
+	if x != nil {
+		return x.IdleCost
+	}
+	return 0
+}
+
 // Workspaces
 type GetWorkspaceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2725,7 +2872,7 @@ type GetWorkspaceRequest struct {
 
 func (x *GetWorkspaceRequest) Reset() {
 	*x = GetWorkspaceRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[39]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2737,7 +2884,7 @@ func (x *GetWorkspaceRequest) String() string {
 func (*GetWorkspaceRequest) ProtoMessage() {}
 
 func (x *GetWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[39]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2750,7 +2897,7 @@ func (x *GetWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{39}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetWorkspaceRequest) GetAtespace() string {
@@ -2776,7 +2923,7 @@ type ListWorkspacesRequest struct {
 
 func (x *ListWorkspacesRequest) Reset() {
 	*x = ListWorkspacesRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[40]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2788,7 +2935,7 @@ func (x *ListWorkspacesRequest) String() string {
 func (*ListWorkspacesRequest) ProtoMessage() {}
 
 func (x *ListWorkspacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[40]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2801,7 +2948,7 @@ func (x *ListWorkspacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspacesRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkspacesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{40}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListWorkspacesRequest) GetAtespace() string {
@@ -2820,7 +2967,7 @@ type ListWorkspacesResponse struct {
 
 func (x *ListWorkspacesResponse) Reset() {
 	*x = ListWorkspacesResponse{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[41]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2832,7 +2979,7 @@ func (x *ListWorkspacesResponse) String() string {
 func (*ListWorkspacesResponse) ProtoMessage() {}
 
 func (x *ListWorkspacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[41]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2845,7 +2992,7 @@ func (x *ListWorkspacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspacesResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkspacesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{41}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ListWorkspacesResponse) GetWorkspaces() []*Workspace {
@@ -2864,7 +3011,7 @@ type UpdateWorkspaceRequest struct {
 
 func (x *UpdateWorkspaceRequest) Reset() {
 	*x = UpdateWorkspaceRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[42]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2876,7 +3023,7 @@ func (x *UpdateWorkspaceRequest) String() string {
 func (*UpdateWorkspaceRequest) ProtoMessage() {}
 
 func (x *UpdateWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[42]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2889,7 +3036,7 @@ func (x *UpdateWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{42}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *UpdateWorkspaceRequest) GetWorkspace() *Workspace {
@@ -2909,7 +3056,7 @@ type DeleteWorkspaceRequest struct {
 
 func (x *DeleteWorkspaceRequest) Reset() {
 	*x = DeleteWorkspaceRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[43]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2921,7 +3068,7 @@ func (x *DeleteWorkspaceRequest) String() string {
 func (*DeleteWorkspaceRequest) ProtoMessage() {}
 
 func (x *DeleteWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[43]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2934,7 +3081,7 @@ func (x *DeleteWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{43}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *DeleteWorkspaceRequest) GetAtespace() string {
@@ -2959,7 +3106,7 @@ type DeleteWorkspaceResponse struct {
 
 func (x *DeleteWorkspaceResponse) Reset() {
 	*x = DeleteWorkspaceResponse{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[44]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2971,7 +3118,7 @@ func (x *DeleteWorkspaceResponse) String() string {
 func (*DeleteWorkspaceResponse) ProtoMessage() {}
 
 func (x *DeleteWorkspaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[44]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2984,7 +3131,7 @@ func (x *DeleteWorkspaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWorkspaceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteWorkspaceResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{44}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{45}
 }
 
 // Models
@@ -2998,7 +3145,7 @@ type GetModelRequest struct {
 
 func (x *GetModelRequest) Reset() {
 	*x = GetModelRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[45]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3010,7 +3157,7 @@ func (x *GetModelRequest) String() string {
 func (*GetModelRequest) ProtoMessage() {}
 
 func (x *GetModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[45]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3023,7 +3170,7 @@ func (x *GetModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetModelRequest.ProtoReflect.Descriptor instead.
 func (*GetModelRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{45}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetModelRequest) GetAtespace() string {
@@ -3049,7 +3196,7 @@ type ListModelsRequest struct {
 
 func (x *ListModelsRequest) Reset() {
 	*x = ListModelsRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[46]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3061,7 +3208,7 @@ func (x *ListModelsRequest) String() string {
 func (*ListModelsRequest) ProtoMessage() {}
 
 func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[46]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3074,7 +3221,7 @@ func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsRequest.ProtoReflect.Descriptor instead.
 func (*ListModelsRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{46}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListModelsRequest) GetAtespace() string {
@@ -3093,7 +3240,7 @@ type ListModelsResponse struct {
 
 func (x *ListModelsResponse) Reset() {
 	*x = ListModelsResponse{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[47]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3105,7 +3252,7 @@ func (x *ListModelsResponse) String() string {
 func (*ListModelsResponse) ProtoMessage() {}
 
 func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[47]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3118,7 +3265,7 @@ func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsResponse.ProtoReflect.Descriptor instead.
 func (*ListModelsResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{47}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListModelsResponse) GetModels() []*Model {
@@ -3137,7 +3284,7 @@ type UpdateModelRequest struct {
 
 func (x *UpdateModelRequest) Reset() {
 	*x = UpdateModelRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[48]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3149,7 +3296,7 @@ func (x *UpdateModelRequest) String() string {
 func (*UpdateModelRequest) ProtoMessage() {}
 
 func (x *UpdateModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[48]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3162,7 +3309,7 @@ func (x *UpdateModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateModelRequest.ProtoReflect.Descriptor instead.
 func (*UpdateModelRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{48}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *UpdateModelRequest) GetModel() *Model {
@@ -3182,7 +3329,7 @@ type DeleteModelRequest struct {
 
 func (x *DeleteModelRequest) Reset() {
 	*x = DeleteModelRequest{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[49]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3194,7 +3341,7 @@ func (x *DeleteModelRequest) String() string {
 func (*DeleteModelRequest) ProtoMessage() {}
 
 func (x *DeleteModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[49]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3207,7 +3354,7 @@ func (x *DeleteModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteModelRequest.ProtoReflect.Descriptor instead.
 func (*DeleteModelRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{49}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *DeleteModelRequest) GetAtespace() string {
@@ -3232,7 +3379,7 @@ type DeleteModelResponse struct {
 
 func (x *DeleteModelResponse) Reset() {
 	*x = DeleteModelResponse{}
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[50]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3244,7 +3391,7 @@ func (x *DeleteModelResponse) String() string {
 func (*DeleteModelResponse) ProtoMessage() {}
 
 func (x *DeleteModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[50]
+	mi := &file_pkg_apis_v1alpha1_ax_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3257,7 +3404,7 @@ func (x *DeleteModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteModelResponse.ProtoReflect.Descriptor instead.
 func (*DeleteModelResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{50}
+	return file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP(), []int{51}
 }
 
 var File_pkg_apis_v1alpha1_ax_proto protoreflect.FileDescriptor
@@ -3459,7 +3606,7 @@ const file_pkg_apis_v1alpha1_ax_proto_rawDesc = "" +
 	"start_date\x18\x03 \x01(\tR\tstartDate\x12\x19\n" +
 	"\bend_date\x18\x04 \x01(\tR\aendDate\"@\n" +
 	"\x11ListUsageResponse\x12+\n" +
-	"\x04days\x18\x01 \x03(\v2\x17.ax.v1alpha1.DailyUsageR\x04days\"\x92\x04\n" +
+	"\x04days\x18\x01 \x03(\v2\x17.ax.v1alpha1.DailyUsageR\x04days\"\xc6\x04\n" +
 	"\n" +
 	"DailyUsage\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
@@ -3475,10 +3622,25 @@ const file_pkg_apis_v1alpha1_ax_proto_rawDesc = "" +
 	"\x13storage_gib_seconds\x18\n" +
 	" \x01(\x01R\x11storageGibSeconds\x124\n" +
 	"\x06tokens\x18\v \x03(\v2\x1c.ax.v1alpha1.ModelTokenUsageR\x06tokens\x12.\n" +
-	"\x04cost\x18\f \x01(\v2\x1a.ax.v1alpha1.CostBreakdownR\x04cost\x1a9\n" +
+	"\x04cost\x18\f \x01(\v2\x1a.ax.v1alpha1.CostBreakdownR\x04cost\x122\n" +
+	"\acharges\x18\r \x03(\v2\x18.ax.v1alpha1.UsageChargeR\acharges\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"E\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc6\x02\n" +
+	"\vUsageCharge\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1d\n" +
+	"\n" +
+	"token_type\x18\x03 \x01(\tR\ttokenType\x12\x1a\n" +
+	"\bquantity\x18\x04 \x01(\x01R\bquantity\x12\x12\n" +
+	"\x04unit\x18\x05 \x01(\tR\x04unit\x12)\n" +
+	"\x10pricing_quantity\x18\x06 \x01(\x01R\x0fpricingQuantity\x12!\n" +
+	"\fpricing_unit\x18\a \x01(\tR\vpricingUnit\x12+\n" +
+	"\x0flist_unit_price\x18\b \x01(\x01H\x00R\rlistUnitPrice\x88\x01\x01\x12\x12\n" +
+	"\x04cost\x18\t \x01(\x01R\x04cost\x12\x1b\n" +
+	"\tidle_cost\x18\n" +
+	" \x01(\x01R\bidleCostB\x12\n" +
+	"\x10_list_unit_price\"E\n" +
 	"\x13GetWorkspaceRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"3\n" +
@@ -3550,7 +3712,7 @@ func file_pkg_apis_v1alpha1_ax_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_apis_v1alpha1_ax_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pkg_apis_v1alpha1_ax_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_pkg_apis_v1alpha1_ax_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_pkg_apis_v1alpha1_ax_proto_goTypes = []any{
 	(ExceededAction)(0),             // 0: ax.v1alpha1.ExceededAction
 	(CompletionPolicy)(0),           // 1: ax.v1alpha1.CompletionPolicy
@@ -3593,27 +3755,28 @@ var file_pkg_apis_v1alpha1_ax_proto_goTypes = []any{
 	(*ListUsageRequest)(nil),        // 38: ax.v1alpha1.ListUsageRequest
 	(*ListUsageResponse)(nil),       // 39: ax.v1alpha1.ListUsageResponse
 	(*DailyUsage)(nil),              // 40: ax.v1alpha1.DailyUsage
-	(*GetWorkspaceRequest)(nil),     // 41: ax.v1alpha1.GetWorkspaceRequest
-	(*ListWorkspacesRequest)(nil),   // 42: ax.v1alpha1.ListWorkspacesRequest
-	(*ListWorkspacesResponse)(nil),  // 43: ax.v1alpha1.ListWorkspacesResponse
-	(*UpdateWorkspaceRequest)(nil),  // 44: ax.v1alpha1.UpdateWorkspaceRequest
-	(*DeleteWorkspaceRequest)(nil),  // 45: ax.v1alpha1.DeleteWorkspaceRequest
-	(*DeleteWorkspaceResponse)(nil), // 46: ax.v1alpha1.DeleteWorkspaceResponse
-	(*GetModelRequest)(nil),         // 47: ax.v1alpha1.GetModelRequest
-	(*ListModelsRequest)(nil),       // 48: ax.v1alpha1.ListModelsRequest
-	(*ListModelsResponse)(nil),      // 49: ax.v1alpha1.ListModelsResponse
-	(*UpdateModelRequest)(nil),      // 50: ax.v1alpha1.UpdateModelRequest
-	(*DeleteModelRequest)(nil),      // 51: ax.v1alpha1.DeleteModelRequest
-	(*DeleteModelResponse)(nil),     // 52: ax.v1alpha1.DeleteModelResponse
-	nil,                             // 53: ax.v1alpha1.ObjectMeta.LabelsEntry
-	nil,                             // 54: ax.v1alpha1.DailyUsage.LabelsEntry
-	(*timestamppb.Timestamp)(nil),   // 55: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),     // 56: google.protobuf.Duration
-	(*structpb.Struct)(nil),         // 57: google.protobuf.Struct
+	(*UsageCharge)(nil),             // 41: ax.v1alpha1.UsageCharge
+	(*GetWorkspaceRequest)(nil),     // 42: ax.v1alpha1.GetWorkspaceRequest
+	(*ListWorkspacesRequest)(nil),   // 43: ax.v1alpha1.ListWorkspacesRequest
+	(*ListWorkspacesResponse)(nil),  // 44: ax.v1alpha1.ListWorkspacesResponse
+	(*UpdateWorkspaceRequest)(nil),  // 45: ax.v1alpha1.UpdateWorkspaceRequest
+	(*DeleteWorkspaceRequest)(nil),  // 46: ax.v1alpha1.DeleteWorkspaceRequest
+	(*DeleteWorkspaceResponse)(nil), // 47: ax.v1alpha1.DeleteWorkspaceResponse
+	(*GetModelRequest)(nil),         // 48: ax.v1alpha1.GetModelRequest
+	(*ListModelsRequest)(nil),       // 49: ax.v1alpha1.ListModelsRequest
+	(*ListModelsResponse)(nil),      // 50: ax.v1alpha1.ListModelsResponse
+	(*UpdateModelRequest)(nil),      // 51: ax.v1alpha1.UpdateModelRequest
+	(*DeleteModelRequest)(nil),      // 52: ax.v1alpha1.DeleteModelRequest
+	(*DeleteModelResponse)(nil),     // 53: ax.v1alpha1.DeleteModelResponse
+	nil,                             // 54: ax.v1alpha1.ObjectMeta.LabelsEntry
+	nil,                             // 55: ax.v1alpha1.DailyUsage.LabelsEntry
+	(*timestamppb.Timestamp)(nil),   // 56: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),     // 57: google.protobuf.Duration
+	(*structpb.Struct)(nil),         // 58: google.protobuf.Struct
 }
 var file_pkg_apis_v1alpha1_ax_proto_depIdxs = []int32{
-	55, // 0: ax.v1alpha1.ObjectMeta.creation_timestamp:type_name -> google.protobuf.Timestamp
-	53, // 1: ax.v1alpha1.ObjectMeta.labels:type_name -> ax.v1alpha1.ObjectMeta.LabelsEntry
+	56, // 0: ax.v1alpha1.ObjectMeta.creation_timestamp:type_name -> google.protobuf.Timestamp
+	54, // 1: ax.v1alpha1.ObjectMeta.labels:type_name -> ax.v1alpha1.ObjectMeta.LabelsEntry
 	2,  // 2: ax.v1alpha1.Task.metadata:type_name -> ax.v1alpha1.ObjectMeta
 	4,  // 3: ax.v1alpha1.Task.spec:type_name -> ax.v1alpha1.TaskSpec
 	11, // 4: ax.v1alpha1.Task.status:type_name -> ax.v1alpha1.TaskStatus
@@ -3622,19 +3785,19 @@ var file_pkg_apis_v1alpha1_ax_proto_depIdxs = []int32{
 	10, // 7: ax.v1alpha1.TaskSpec.workspaces:type_name -> ax.v1alpha1.WorkspaceRef
 	5,  // 8: ax.v1alpha1.TaskSpec.budget:type_name -> ax.v1alpha1.BudgetSpec
 	1,  // 9: ax.v1alpha1.TaskSpec.on_completion:type_name -> ax.v1alpha1.CompletionPolicy
-	56, // 10: ax.v1alpha1.BudgetSpec.active_deadline:type_name -> google.protobuf.Duration
+	57, // 10: ax.v1alpha1.BudgetSpec.active_deadline:type_name -> google.protobuf.Duration
 	6,  // 11: ax.v1alpha1.BudgetSpec.max_cost:type_name -> ax.v1alpha1.Money
 	0,  // 12: ax.v1alpha1.BudgetSpec.on_exceeded:type_name -> ax.v1alpha1.ExceededAction
 	9,  // 13: ax.v1alpha1.ResourceReqs.requests:type_name -> ax.v1alpha1.ResourceList
 	9,  // 14: ax.v1alpha1.ResourceReqs.limits:type_name -> ax.v1alpha1.ResourceList
 	15, // 15: ax.v1alpha1.TaskStatus.conditions:type_name -> ax.v1alpha1.Condition
 	12, // 16: ax.v1alpha1.TaskStatus.usage:type_name -> ax.v1alpha1.UsageStatus
-	56, // 17: ax.v1alpha1.UsageStatus.active_duration:type_name -> google.protobuf.Duration
-	56, // 18: ax.v1alpha1.UsageStatus.idle_duration:type_name -> google.protobuf.Duration
+	57, // 17: ax.v1alpha1.UsageStatus.active_duration:type_name -> google.protobuf.Duration
+	57, // 18: ax.v1alpha1.UsageStatus.idle_duration:type_name -> google.protobuf.Duration
 	13, // 19: ax.v1alpha1.UsageStatus.tokens:type_name -> ax.v1alpha1.ModelTokenUsage
 	14, // 20: ax.v1alpha1.UsageStatus.cost:type_name -> ax.v1alpha1.CostBreakdown
-	55, // 21: ax.v1alpha1.UsageStatus.update_time:type_name -> google.protobuf.Timestamp
-	55, // 22: ax.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	56, // 21: ax.v1alpha1.UsageStatus.update_time:type_name -> google.protobuf.Timestamp
+	56, // 22: ax.v1alpha1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
 	2,  // 23: ax.v1alpha1.Workspace.metadata:type_name -> ax.v1alpha1.ObjectMeta
 	17, // 24: ax.v1alpha1.Workspace.spec:type_name -> ax.v1alpha1.WorkspaceSpec
 	18, // 25: ax.v1alpha1.WorkspaceSpec.git:type_name -> ax.v1alpha1.GitRepo
@@ -3648,55 +3811,56 @@ var file_pkg_apis_v1alpha1_ax_proto_depIdxs = []int32{
 	2,  // 33: ax.v1alpha1.Model.metadata:type_name -> ax.v1alpha1.ObjectMeta
 	26, // 34: ax.v1alpha1.Model.spec:type_name -> ax.v1alpha1.ModelSpec
 	27, // 35: ax.v1alpha1.ModelSpec.secret_key:type_name -> ax.v1alpha1.SecretKeyRef
-	57, // 36: ax.v1alpha1.ModelSpec.parameters:type_name -> google.protobuf.Struct
+	58, // 36: ax.v1alpha1.ModelSpec.parameters:type_name -> google.protobuf.Struct
 	3,  // 37: ax.v1alpha1.ListTasksResponse.tasks:type_name -> ax.v1alpha1.Task
 	3,  // 38: ax.v1alpha1.CreateTaskRequest.task:type_name -> ax.v1alpha1.Task
 	3,  // 39: ax.v1alpha1.WatchTaskResponse.task:type_name -> ax.v1alpha1.Task
 	40, // 40: ax.v1alpha1.ListUsageResponse.days:type_name -> ax.v1alpha1.DailyUsage
-	54, // 41: ax.v1alpha1.DailyUsage.labels:type_name -> ax.v1alpha1.DailyUsage.LabelsEntry
+	55, // 41: ax.v1alpha1.DailyUsage.labels:type_name -> ax.v1alpha1.DailyUsage.LabelsEntry
 	13, // 42: ax.v1alpha1.DailyUsage.tokens:type_name -> ax.v1alpha1.ModelTokenUsage
 	14, // 43: ax.v1alpha1.DailyUsage.cost:type_name -> ax.v1alpha1.CostBreakdown
-	16, // 44: ax.v1alpha1.ListWorkspacesResponse.workspaces:type_name -> ax.v1alpha1.Workspace
-	16, // 45: ax.v1alpha1.UpdateWorkspaceRequest.workspace:type_name -> ax.v1alpha1.Workspace
-	25, // 46: ax.v1alpha1.ListModelsResponse.models:type_name -> ax.v1alpha1.Model
-	25, // 47: ax.v1alpha1.UpdateModelRequest.model:type_name -> ax.v1alpha1.Model
-	28, // 48: ax.v1alpha1.AX.GetTask:input_type -> ax.v1alpha1.GetTaskRequest
-	29, // 49: ax.v1alpha1.AX.ListTasks:input_type -> ax.v1alpha1.ListTasksRequest
-	31, // 50: ax.v1alpha1.AX.CreateTask:input_type -> ax.v1alpha1.CreateTaskRequest
-	32, // 51: ax.v1alpha1.AX.DeleteTask:input_type -> ax.v1alpha1.DeleteTaskRequest
-	34, // 52: ax.v1alpha1.AX.SuspendTask:input_type -> ax.v1alpha1.SuspendTaskRequest
-	35, // 53: ax.v1alpha1.AX.ResumeTask:input_type -> ax.v1alpha1.ResumeTaskRequest
-	36, // 54: ax.v1alpha1.AX.WatchTask:input_type -> ax.v1alpha1.WatchTaskRequest
-	38, // 55: ax.v1alpha1.AX.ListUsage:input_type -> ax.v1alpha1.ListUsageRequest
-	41, // 56: ax.v1alpha1.AX.GetWorkspace:input_type -> ax.v1alpha1.GetWorkspaceRequest
-	42, // 57: ax.v1alpha1.AX.ListWorkspaces:input_type -> ax.v1alpha1.ListWorkspacesRequest
-	44, // 58: ax.v1alpha1.AX.UpdateWorkspace:input_type -> ax.v1alpha1.UpdateWorkspaceRequest
-	45, // 59: ax.v1alpha1.AX.DeleteWorkspace:input_type -> ax.v1alpha1.DeleteWorkspaceRequest
-	47, // 60: ax.v1alpha1.AX.GetModel:input_type -> ax.v1alpha1.GetModelRequest
-	48, // 61: ax.v1alpha1.AX.ListModels:input_type -> ax.v1alpha1.ListModelsRequest
-	50, // 62: ax.v1alpha1.AX.UpdateModel:input_type -> ax.v1alpha1.UpdateModelRequest
-	51, // 63: ax.v1alpha1.AX.DeleteModel:input_type -> ax.v1alpha1.DeleteModelRequest
-	3,  // 64: ax.v1alpha1.AX.GetTask:output_type -> ax.v1alpha1.Task
-	30, // 65: ax.v1alpha1.AX.ListTasks:output_type -> ax.v1alpha1.ListTasksResponse
-	3,  // 66: ax.v1alpha1.AX.CreateTask:output_type -> ax.v1alpha1.Task
-	33, // 67: ax.v1alpha1.AX.DeleteTask:output_type -> ax.v1alpha1.DeleteTaskResponse
-	3,  // 68: ax.v1alpha1.AX.SuspendTask:output_type -> ax.v1alpha1.Task
-	3,  // 69: ax.v1alpha1.AX.ResumeTask:output_type -> ax.v1alpha1.Task
-	37, // 70: ax.v1alpha1.AX.WatchTask:output_type -> ax.v1alpha1.WatchTaskResponse
-	39, // 71: ax.v1alpha1.AX.ListUsage:output_type -> ax.v1alpha1.ListUsageResponse
-	16, // 72: ax.v1alpha1.AX.GetWorkspace:output_type -> ax.v1alpha1.Workspace
-	43, // 73: ax.v1alpha1.AX.ListWorkspaces:output_type -> ax.v1alpha1.ListWorkspacesResponse
-	16, // 74: ax.v1alpha1.AX.UpdateWorkspace:output_type -> ax.v1alpha1.Workspace
-	46, // 75: ax.v1alpha1.AX.DeleteWorkspace:output_type -> ax.v1alpha1.DeleteWorkspaceResponse
-	25, // 76: ax.v1alpha1.AX.GetModel:output_type -> ax.v1alpha1.Model
-	49, // 77: ax.v1alpha1.AX.ListModels:output_type -> ax.v1alpha1.ListModelsResponse
-	25, // 78: ax.v1alpha1.AX.UpdateModel:output_type -> ax.v1alpha1.Model
-	52, // 79: ax.v1alpha1.AX.DeleteModel:output_type -> ax.v1alpha1.DeleteModelResponse
-	64, // [64:80] is the sub-list for method output_type
-	48, // [48:64] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	41, // 44: ax.v1alpha1.DailyUsage.charges:type_name -> ax.v1alpha1.UsageCharge
+	16, // 45: ax.v1alpha1.ListWorkspacesResponse.workspaces:type_name -> ax.v1alpha1.Workspace
+	16, // 46: ax.v1alpha1.UpdateWorkspaceRequest.workspace:type_name -> ax.v1alpha1.Workspace
+	25, // 47: ax.v1alpha1.ListModelsResponse.models:type_name -> ax.v1alpha1.Model
+	25, // 48: ax.v1alpha1.UpdateModelRequest.model:type_name -> ax.v1alpha1.Model
+	28, // 49: ax.v1alpha1.AX.GetTask:input_type -> ax.v1alpha1.GetTaskRequest
+	29, // 50: ax.v1alpha1.AX.ListTasks:input_type -> ax.v1alpha1.ListTasksRequest
+	31, // 51: ax.v1alpha1.AX.CreateTask:input_type -> ax.v1alpha1.CreateTaskRequest
+	32, // 52: ax.v1alpha1.AX.DeleteTask:input_type -> ax.v1alpha1.DeleteTaskRequest
+	34, // 53: ax.v1alpha1.AX.SuspendTask:input_type -> ax.v1alpha1.SuspendTaskRequest
+	35, // 54: ax.v1alpha1.AX.ResumeTask:input_type -> ax.v1alpha1.ResumeTaskRequest
+	36, // 55: ax.v1alpha1.AX.WatchTask:input_type -> ax.v1alpha1.WatchTaskRequest
+	38, // 56: ax.v1alpha1.AX.ListUsage:input_type -> ax.v1alpha1.ListUsageRequest
+	42, // 57: ax.v1alpha1.AX.GetWorkspace:input_type -> ax.v1alpha1.GetWorkspaceRequest
+	43, // 58: ax.v1alpha1.AX.ListWorkspaces:input_type -> ax.v1alpha1.ListWorkspacesRequest
+	45, // 59: ax.v1alpha1.AX.UpdateWorkspace:input_type -> ax.v1alpha1.UpdateWorkspaceRequest
+	46, // 60: ax.v1alpha1.AX.DeleteWorkspace:input_type -> ax.v1alpha1.DeleteWorkspaceRequest
+	48, // 61: ax.v1alpha1.AX.GetModel:input_type -> ax.v1alpha1.GetModelRequest
+	49, // 62: ax.v1alpha1.AX.ListModels:input_type -> ax.v1alpha1.ListModelsRequest
+	51, // 63: ax.v1alpha1.AX.UpdateModel:input_type -> ax.v1alpha1.UpdateModelRequest
+	52, // 64: ax.v1alpha1.AX.DeleteModel:input_type -> ax.v1alpha1.DeleteModelRequest
+	3,  // 65: ax.v1alpha1.AX.GetTask:output_type -> ax.v1alpha1.Task
+	30, // 66: ax.v1alpha1.AX.ListTasks:output_type -> ax.v1alpha1.ListTasksResponse
+	3,  // 67: ax.v1alpha1.AX.CreateTask:output_type -> ax.v1alpha1.Task
+	33, // 68: ax.v1alpha1.AX.DeleteTask:output_type -> ax.v1alpha1.DeleteTaskResponse
+	3,  // 69: ax.v1alpha1.AX.SuspendTask:output_type -> ax.v1alpha1.Task
+	3,  // 70: ax.v1alpha1.AX.ResumeTask:output_type -> ax.v1alpha1.Task
+	37, // 71: ax.v1alpha1.AX.WatchTask:output_type -> ax.v1alpha1.WatchTaskResponse
+	39, // 72: ax.v1alpha1.AX.ListUsage:output_type -> ax.v1alpha1.ListUsageResponse
+	16, // 73: ax.v1alpha1.AX.GetWorkspace:output_type -> ax.v1alpha1.Workspace
+	44, // 74: ax.v1alpha1.AX.ListWorkspaces:output_type -> ax.v1alpha1.ListWorkspacesResponse
+	16, // 75: ax.v1alpha1.AX.UpdateWorkspace:output_type -> ax.v1alpha1.Workspace
+	47, // 76: ax.v1alpha1.AX.DeleteWorkspace:output_type -> ax.v1alpha1.DeleteWorkspaceResponse
+	25, // 77: ax.v1alpha1.AX.GetModel:output_type -> ax.v1alpha1.Model
+	50, // 78: ax.v1alpha1.AX.ListModels:output_type -> ax.v1alpha1.ListModelsResponse
+	25, // 79: ax.v1alpha1.AX.UpdateModel:output_type -> ax.v1alpha1.Model
+	53, // 80: ax.v1alpha1.AX.DeleteModel:output_type -> ax.v1alpha1.DeleteModelResponse
+	65, // [65:81] is the sub-list for method output_type
+	49, // [49:65] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_pkg_apis_v1alpha1_ax_proto_init() }
@@ -3704,13 +3868,14 @@ func file_pkg_apis_v1alpha1_ax_proto_init() {
 	if File_pkg_apis_v1alpha1_ax_proto != nil {
 		return
 	}
+	file_pkg_apis_v1alpha1_ax_proto_msgTypes[39].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_apis_v1alpha1_ax_proto_rawDesc), len(file_pkg_apis_v1alpha1_ax_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   53,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
