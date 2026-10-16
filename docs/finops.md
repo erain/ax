@@ -91,5 +91,36 @@ Metrics (no per-task attributes; common attributes are `ax.atespace` and
 - `ax.budget.threshold_crossed`
 
 Each per-task summary is one slog line with `msg="ax.task.usage_summary"`
-and a `reason` of suspend, delete, threshold or periodic. It carries usage
+and a `reason` of suspend, delete, threshold, periodic or completed. It carries usage
 totals, tokens and the cost breakdown.
+
+## Suspend on completion
+
+A task with `spec.onCompletion: SUSPEND_ON_EXIT` is suspended once its runner
+reports `commandExited`. KEEP and unspecified tasks only get `Idle=True`
+(reason `CommandExited`).
+
+- **Trigger:** every committed usage write (the puller's pull, or ingest) and
+  the periodic summary sweep check the committed record. If the task is
+  Running and eligible, one background completion starts per task. The writer
+  never waits for the suspend.
+- **Completion:** it follows the same path as `SuspendTask`:
+  1. Flush, then take the task lock.
+  2. Re-check eligibility on fresh reads of the task and the usage record.
+  3. Reconcile the suspend.
+  4. Set phase `Completed` and condition `Completed=True` with reason
+     `SuspendedOnExit`. The message gives the exit code and the runner
+     session.
+  5. Persist once and log a `reason=completed` summary line.
+
+  Because of the locked re-check, concurrent reports and replicas suspend only
+  once. A failed suspend persists nothing. It is retried by a later usage
+  write, 30s after the failure at the earliest.
+- **Resume:** a Completed task resumes like a Suspended one. The condition
+  becomes `Completed=False` (reason `Resumed`) and keeps the completed runner
+  session. That session is never completed again. On gVisor, resume restores
+  the checkpointed process tree, so the runner keeps its session and keeps
+  reporting `commandExited`. The task then stays Running with
+  `Idle=True/CommandExited` until it is suspended or deleted. If a new runner
+  session starts (a fresh container) and its command exits, the task completes
+  again.

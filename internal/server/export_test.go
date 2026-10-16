@@ -26,3 +26,10 @@ func SetRunningPageSize(n int64) func() {
 
 // SetLabelCacheClock overrides the LabelCache clock (tests).
 func (c *LabelCache) SetClock(now func() time.Time) { c.now = now }
+
+// WaitCompletions waits for background suspend-on-completion runs (tests).
+func (s *Server) WaitCompletions() {
+	if s.fin != nil {
+		s.fin.completions.wg.Wait()
+	}
+}

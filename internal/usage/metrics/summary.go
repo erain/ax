@@ -35,6 +35,8 @@ const (
 	ReasonDelete    = "delete"
 	ReasonThreshold = "threshold"
 	ReasonPeriodic  = "periodic"
+	// ReasonCompleted: suspended on completion (onCompletion SUSPEND_ON_EXIT).
+	ReasonCompleted = "completed"
 )
 
 // TaskSummary is the input of one summary line. Usage may be nil (no usage
