@@ -67,7 +67,7 @@ push: push-task-runner
 # are checked in. Tool versions used for the checked-in files:
 #   protoc               v36.x  (brew install protobuf)
 #   protoc-gen-go        v1.36.11 (go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11)
-#   protoc-gen-go-grpc   v1.6.x (go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0)
+#   protoc-gen-go-grpc   v1.6.x (go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2)
 # protoc comes from PATH; the plugins are looked up on PATH with $(go env GOBIN)
 # and $(go env GOPATH)/bin appended. Well-known types (duration, timestamp,
 # struct) come from the protobuf install prefix, or protoc's bundled include.
