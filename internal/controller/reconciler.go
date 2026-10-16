@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/ax/internal/model"
 	"github.com/google/ax/internal/substrate"
 	"github.com/google/ax/pkg/apis/v1alpha1"
@@ -71,6 +72,10 @@ type TaskReconciler struct {
 	// WorkspaceReadyTimeout bounds how long Reconcile waits for the actor's workspace
 	// to report ready before recording it as still initializing.
 	WorkspaceReadyTimeout time.Duration
+
+	// DefaultImage is the task runner image used when a task does not set
+	// spec.image (empty means v1alpha1.DefaultTaskImage).
+	DefaultImage string
 }
 
 // NewTaskReconciler creates a new TaskReconciler.
@@ -109,7 +114,10 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		task.Spec = &v1alpha1.TaskSpec{}
 	}
 	if task.Spec.Image == "" {
-		task.Spec.Image = v1alpha1.DefaultTaskImage
+		task.Spec.Image = r.DefaultImage
+		if task.Spec.Image == "" {
+			task.Spec.Image = v1alpha1.DefaultTaskImage
+		}
 	}
 
 	slog.Info("reconciling task", "name", task.Metadata.Name, "atespace", atespace, "image", task.Spec.Image)
@@ -190,7 +198,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		}
 	}
 
-	_, err := r.client.EnsureActor(ctx, atespace, actorName, templateAtespace, templateName)
+	actor, err := r.client.EnsureActor(ctx, atespace, actorName, templateAtespace, templateName)
 	if err != nil {
 		if substrate.IsTransientError(err) {
 			r.setNotReady(task, "SubstrateUnavailable", err.Error(), now)
@@ -201,6 +209,9 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		task.Status.Phase = "Failed"
 		return task, fmt.Errorf("ensuring actor: %w", err)
 	}
+	// Record the actor's uid: usage ingestion attributes Substrate events by
+	// it and resets the usage record when the task's actor is replaced.
+	setActorUID(task, actor)
 
 	// 4. Suspend or Resume the Actor
 	// Tasks are suspended by default upon creation until explicitly resumed to "Running".
@@ -218,7 +229,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 
 	// Resume the Actor to activate container execution
 	slog.Info("resuming actor on Substrate worker", "actor", actorName)
-	_, workerIP, err := r.client.ResumeActor(ctx, atespace, actorName)
+	resumed, workerIP, err := r.client.ResumeActor(ctx, atespace, actorName)
 	if err != nil {
 		if substrate.IsTransientError(err) {
 			r.setNotReady(task, "SubstrateUnavailable", err.Error(), now)
@@ -230,6 +241,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		return task, fmt.Errorf("resuming actor: %w", err)
 	}
 
+	setActorUID(task, resumed)
 	task.Status.WorkerIp = workerIP
 	task.Status.Phase = "Running"
 
@@ -315,6 +327,14 @@ DonePolling:
 	)
 
 	return task, nil
+}
+
+// setActorUID records the Substrate actor's uid in the task status when the
+// response carries one.
+func setActorUID(task *v1alpha1.Task, actor *ateapipb.Actor) {
+	if uid := actor.GetMetadata().GetUid(); uid != "" {
+		task.Status.ActorUid = uid
+	}
 }
 
 // Condition types reported on Task status.
