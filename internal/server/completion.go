@@ -182,7 +182,11 @@ func (s *Server) markResumed(task *v1alpha1.Task) {
 		} else {
 			msg = "resumed after completion"
 		}
-		setCompletedCondition(task, budget.StatusFalse, ReasonResumed, msg, time.Now())
+		now := time.Now
+		if s.fin != nil && s.fin.clock != nil {
+			now = s.fin.clock
+		}
+		setCompletedCondition(task, budget.StatusFalse, ReasonResumed, msg, now())
 		return
 	}
 }

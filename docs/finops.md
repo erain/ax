@@ -63,12 +63,19 @@ BudgetExceeded / Idle conditions are merged at read time (ListTasks does one usa
   start, so right before each router request the puller also re-reads the task
   (one task-store GET) and skips the pull unless it is still Running on the
   same worker IP. It also skips it when the usage record's newest actor state
-  event is a closing one (suspending, suspended, crashed, deleting, deleted),
+  event is a closing one (suspending, suspended, crashed, deleting, deleted,
+  reverting),
   which catches a Substrate-side suspension that the task store has not seen
   yet. Skipped pulls show as `skipped=N` on the `usage puller sweep` log line.
   SuspendTask's flush runs while the task is still Running, so it is not
   skipped. The window that remains is milliseconds (between the re-check and
-  the request) plus the ingest latency of state events.
+  the request) plus the ingest latency of state events. Two side effects of
+  the state check: after an AX ResumeTask, router pulls are skipped until the
+  ingestor records the `resuming`/`running` event or a new-epoch sample; and
+  if state events stop arriving while the newest one is a closing state, a
+  Running task is not pulled, so its tokens arrive late (on the first pull
+  after events resume) but are not lost, because the runner report is
+  cumulative.
 - Lock order: the task lock may be held while calling the task store and the
   usage store's Get/List/Delete. It is never held while calling usage
   `Update`, the puller, or usage hooks.
@@ -165,6 +172,8 @@ reports `commandExited`. KEEP and unspecified tasks only get `Idle=True`
   Because of the locked re-check, concurrent reports and replicas suspend only
   once. A failed suspend persists nothing. It is retried by a later usage
   write, 30s after the failure at the earliest.
+- **Suspend:** `SuspendTask` on a Completed task is a no-op. It returns the
+  task unchanged (phase `Completed`, `Completed=True`) without a reconcile.
 - **Resume:** a Completed task resumes like a Suspended one. The condition
   becomes `Completed=False` (reason `Resumed`) and keeps the completed runner
   session. That session is never completed again. On gVisor, resume restores
