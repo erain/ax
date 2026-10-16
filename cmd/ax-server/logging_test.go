@@ -31,9 +31,10 @@ func TestNewLogHandler_JSONCloudLogging(t *testing.T) {
 	l := slog.New(h)
 	l.Info("ax.task.usage_summary", "task", "t1", "labels", map[string]string{"agent": "a"}, "cost_total", 0.5)
 	l.Warn("w", slog.Group("g", slog.String("level", "x")))
+	l.Info("budget threshold crossed", "task", "t1", "level", "warning")
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 2 {
+	if len(lines) != 3 {
 		t.Fatalf("got %d lines: %q", len(lines), buf.String())
 	}
 	var m map[string]any
@@ -58,6 +59,17 @@ func TestNewLogHandler_JSONCloudLogging(t *testing.T) {
 	}
 	if g, _ := m["g"].(map[string]any); g["level"] != "x" {
 		t.Errorf("grouped level attr changed: %v", m["g"])
+	}
+	// A top-level user attr named "level" stays "level" (no second "severity").
+	if n := strings.Count(lines[2], `"severity"`); n != 1 {
+		t.Errorf("line has %d severity keys: %s", n, lines[2])
+	}
+	m = nil
+	if err := json.Unmarshal([]byte(lines[2]), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["severity"] != "INFO" || m["level"] != "warning" {
+		t.Errorf("severity = %v, level = %v; want INFO, warning", m["severity"], m["level"])
 	}
 }
 

@@ -127,3 +127,29 @@ gcloud artifacts docker images describe \
    The puller fetches the runner's counters every 60s while the task is
    Running, so allow about a minute before comparing. Deleting the task deletes
    the actor and its egress policy.
+
+## End-to-end demo (`demo.sh`)
+
+`demo.sh` runs a small fleet of this harness on a FinOps-enabled cluster and
+captures the cost evidence:
+
+- **Fleet:** 6 tasks, agents `summarizer|planner|triage` × fictional customers
+  `acme|globex`. The tasks mix `gemini-3-flash-preview`, `gemini-2.5-flash-lite`
+  and `gemini-3.1-pro-preview`, and both report modes.
+- **Scenarios:** a tight `maxCost` (`BudgetWarning`, then `BudgetExceeded`), an
+  idle task (`Idle` plus idle cost), a `SUSPEND_ON_EXIT` task (`Completed`), and
+  a task that is suspended mid-run and then resumed.
+- **Outputs:** `ax get tasks`, `ax describe task`, `ax cost summary --by
+  agent|customer`, a FOCUS CSV and the dashboard PromQL totals. All of them are
+  written to `--out DIR`.
+
+```sh
+examples/finops-agent/demo.sh                     # about 10 minutes; keeps the tasks
+examples/finops-agent/demo.sh --cleanup-only      # delete the demo tasks later
+examples/finops-agent/demo.sh --promql-only --out DIR   # re-query the dashboard metrics
+```
+
+The demo tasks are kept at the end, Suspended (one is Completed). A suspended
+task accrues no compute, but its usage stays visible. Deleting a task deletes
+its usage, so it also disappears from `ax cost summary` and `ax cost export`.
+The models must be on the deployed rate card (`deploy/ratecard.yaml`).

@@ -45,13 +45,18 @@ func newLogHandler(format string, w io.Writer, level slog.Leveler) (slog.Handler
 	}
 }
 
+// cloudLoggingSeverity renames the record's built-in level to "severity".
+// Only the built-in level attr (a slog.Level value) is renamed: a top-level
+// user attr that happens to be called "level" (e.g. the budget crossing's
+// level=warning|exceeded) is kept as is, so a line never gets two "severity"
+// keys.
 func cloudLoggingSeverity(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) != 0 || a.Key != slog.LevelKey {
 		return a
 	}
 	lvl, ok := a.Value.Any().(slog.Level)
 	if !ok {
-		return slog.String("severity", a.Value.String())
+		return a
 	}
 	var s string
 	switch {
