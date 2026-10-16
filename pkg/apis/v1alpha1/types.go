@@ -19,13 +19,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,6 +44,21 @@ const (
 	// PhaseTerminating marks a task whose deletion has been requested and whose
 	// actor is being torn down. The record disappears once cleanup completes.
 	PhaseTerminating = "Terminating"
+
+	// PhaseCompleted marks a task whose command exited and which was suspended
+	// because of spec.onCompletion SUSPEND_ON_EXIT.
+	PhaseCompleted = "Completed"
+)
+
+// Task condition types.
+const (
+	// ConditionBudgetWarning is True while some budget limit is at or above its
+	// warning threshold but below the limit.
+	ConditionBudgetWarning = "BudgetWarning"
+	// ConditionBudgetExceeded is True once some budget limit has been reached.
+	ConditionBudgetExceeded = "BudgetExceeded"
+	// ConditionIdle is True while a running task is idle.
+	ConditionIdle = "Idle"
 )
 
 // YAML encoding.
@@ -70,7 +88,59 @@ func marshalYAML(m proto.Message) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return jsonToYAMLNode(data)
+	n, err := jsonToYAMLNode(data)
+	if err != nil {
+		return nil, err
+	}
+	tagInt64s(n, m.ProtoReflect().Descriptor())
+	return n, nil
+}
+
+// tagInt64s retags the 64-bit integer fields of a protojson-derived node as
+// YAML integers. protojson renders them as strings, which would otherwise be
+// written quoted (maxTokens: "1000").
+func tagInt64s(n *yaml.Node, md protoreflect.MessageDescriptor) {
+	if n.Kind != yaml.MappingNode || strings.HasPrefix(string(md.FullName()), "google.protobuf.") {
+		return
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		fd := md.Fields().ByJSONName(n.Content[i].Value)
+		if fd == nil {
+			continue
+		}
+		val := n.Content[i+1]
+		switch {
+		case fd.IsMap():
+			if val.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 1; j < len(val.Content); j += 2 {
+				tagInt64Value(val.Content[j], fd.MapValue())
+			}
+		case fd.IsList():
+			for _, item := range val.Content {
+				tagInt64Value(item, fd)
+			}
+		default:
+			tagInt64Value(val, fd)
+		}
+	}
+}
+
+func tagInt64Value(n *yaml.Node, fd protoreflect.FieldDescriptor) {
+	switch fd.Kind() {
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		tagInt64s(n, fd.Message())
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
+		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		if n.Kind == yaml.ScalarNode && n.Tag == "!!str" {
+			if _, err := strconv.ParseInt(n.Value, 10, 64); err == nil {
+				n.Tag = "!!int"
+			} else if _, err := strconv.ParseUint(n.Value, 10, 64); err == nil {
+				n.Tag = "!!int"
+			}
+		}
+	}
 }
 
 func unmarshalYAML(value *yaml.Node, m proto.Message, normalize normalizer) error {
@@ -159,6 +229,33 @@ func readJSONValue(dec *json.Decoder) (*yaml.Node, error) {
 
 // Legacy manifest shapes.
 
+// normalizeTask accepts spec.budget.activeDeadline written as a Go duration
+// string such as "30m" or "1h30m"; protojson only accepts seconds ("1800s").
+func normalizeTask(doc map[string]any) {
+	spec, _ := doc["spec"].(map[string]any)
+	budget, _ := spec["budget"].(map[string]any)
+	if s, ok := budget["activeDeadline"].(string); ok {
+		if d, err := time.ParseDuration(s); err == nil {
+			budget["activeDeadline"] = protoDurationString(d)
+		}
+	}
+}
+
+// protoDurationString formats d the way protojson writes a
+// google.protobuf.Duration: seconds with an "s" suffix.
+func protoDurationString(d time.Duration) string {
+	sign := ""
+	if d < 0 {
+		sign = "-"
+		d = -d
+	}
+	secs, nanos := int64(d/time.Second), int64(d%time.Second)
+	if nanos == 0 {
+		return fmt.Sprintf("%s%ds", sign, secs)
+	}
+	return fmt.Sprintf("%s%d.%09ds", sign, secs, nanos)
+}
+
 // normalizeWorkspace accepts spec.mcp written as a bare list of servers.
 func normalizeWorkspace(doc map[string]any) {
 	spec, _ := doc["spec"].(map[string]any)
@@ -195,7 +292,7 @@ func normalizeModel(doc map[string]any) {
 // their parent, so only the kinds that are encoded on their own need these.
 
 func (t *Task) MarshalYAML() (any, error)        { return marshalYAML(t) }
-func (t *Task) UnmarshalYAML(n *yaml.Node) error { return unmarshalYAML(n, t, nil) }
+func (t *Task) UnmarshalYAML(n *yaml.Node) error { return unmarshalYAML(n, t, normalizeTask) }
 
 func (w *Workspace) MarshalYAML() (any, error)        { return marshalYAML(w) }
 func (w *Workspace) UnmarshalYAML(n *yaml.Node) error { return unmarshalYAML(n, w, normalizeWorkspace) }
@@ -268,8 +365,8 @@ func ValidateName(s string) error {
 	return nil
 }
 
-// ValidateObjectMeta checks a resource's name and, when set, its atespace. An
-// empty atespace is fine here; the API server defaults it.
+// ValidateObjectMeta checks a resource's name, its labels and, when set, its
+// atespace. An empty atespace is fine here; the API server defaults it.
 func ValidateObjectMeta(meta *ObjectMeta) error {
 	if err := ValidateName(meta.GetName()); err != nil {
 		return fmt.Errorf("metadata.name: invalid value %q: %w", meta.GetName(), err)
@@ -278,6 +375,120 @@ func ValidateObjectMeta(meta *ObjectMeta) error {
 		if err := ValidateName(atespace); err != nil {
 			return fmt.Errorf("metadata.atespace: invalid value %q: %w", atespace, err)
 		}
+	}
+	if err := ValidateLabels(meta.GetLabels()); err != nil {
+		return fmt.Errorf("metadata.labels: %w", err)
+	}
+	return nil
+}
+
+// Labels.
+//
+// Labels follow Kubernetes label syntax so selectors and tooling behave the
+// same way they do there.
+
+const (
+	// MaxLabelNameLength is the longest label value, and the longest label key
+	// name (the part after an optional prefix).
+	MaxLabelNameLength = 63
+	// MaxLabelPrefixLength is the longest label key prefix.
+	MaxLabelPrefixLength = 253
+)
+
+var (
+	labelNameRegexp   = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
+	labelPrefixRegexp = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+)
+
+// ValidateLabelKey reports whether k is a valid label key: a name of at most
+// MaxLabelNameLength alphanumeric characters, '-', '_' or '.', starting and
+// ending with an alphanumeric character, optionally preceded by a DNS
+// subdomain prefix of at most MaxLabelPrefixLength characters and a '/'.
+func ValidateLabelKey(k string) error {
+	name := k
+	if prefix, rest, ok := strings.Cut(k, "/"); ok {
+		if prefix == "" || len(prefix) > MaxLabelPrefixLength || !labelPrefixRegexp.MatchString(prefix) {
+			return fmt.Errorf("invalid key %q: prefix must be a lowercase DNS subdomain of at most %d characters", k, MaxLabelPrefixLength)
+		}
+		name = rest
+	}
+	if name == "" || len(name) > MaxLabelNameLength || !labelNameRegexp.MatchString(name) {
+		return fmt.Errorf("invalid key %q: name must be at most %d alphanumeric characters, '-', '_' or '.', starting and ending with an alphanumeric character", k, MaxLabelNameLength)
+	}
+	return nil
+}
+
+// ValidateLabelValue reports whether v is a valid label value: empty, or at
+// most MaxLabelNameLength alphanumeric characters, '-', '_' or '.', starting
+// and ending with an alphanumeric character.
+func ValidateLabelValue(v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) > MaxLabelNameLength || !labelNameRegexp.MatchString(v) {
+		return fmt.Errorf("invalid value %q: must be at most %d alphanumeric characters, '-', '_' or '.', starting and ending with an alphanumeric character", v, MaxLabelNameLength)
+	}
+	return nil
+}
+
+// ValidateLabels checks every key and value of labels, reporting the first
+// problem in key order.
+func ValidateLabels(labels map[string]string) error {
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		if err := ValidateLabelKey(k); err != nil {
+			return err
+		}
+		if err := ValidateLabelValue(labels[k]); err != nil {
+			return fmt.Errorf("label %q: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// Budgets.
+
+// BudgetCurrency is the only currency budgets and rate cards support.
+const BudgetCurrency = "USD"
+
+// ValidateBudget reports the first problem with a task budget. A nil budget is
+// valid.
+func ValidateBudget(b *BudgetSpec) error {
+	if b == nil {
+		return nil
+	}
+	if d := b.GetActiveDeadline(); d != nil {
+		if err := d.CheckValid(); err != nil {
+			return fmt.Errorf("activeDeadline: %w", err)
+		}
+		if d.AsDuration() < 0 {
+			return fmt.Errorf("activeDeadline: must not be negative, got %s", d.AsDuration())
+		}
+	}
+	if b.GetMaxTokens() < 0 {
+		return fmt.Errorf("maxTokens: must not be negative, got %d", b.GetMaxTokens())
+	}
+	if c := b.GetMaxCost(); c != nil {
+		if a := c.GetAmount(); a < 0 || math.IsNaN(a) || math.IsInf(a, 0) {
+			return fmt.Errorf("maxCost.amount: must be a non-negative number, got %v", a)
+		}
+		if cur := c.GetCurrency(); cur != "" && cur != BudgetCurrency {
+			return fmt.Errorf("maxCost.currency: only %s is supported, got %q", BudgetCurrency, cur)
+		}
+	}
+	if p := b.GetWarnAtPercent(); p < 0 || p > 100 {
+		return fmt.Errorf("warnAtPercent: must be between 0 and 100, got %d", p)
+	}
+	switch b.GetOnExceeded() {
+	case ExceededAction_EXCEEDED_ACTION_UNSPECIFIED, ExceededAction_WARN:
+	case ExceededAction_SUSPEND:
+		return errors.New("onExceeded: SUSPEND is not supported yet")
+	default:
+		return fmt.Errorf("onExceeded: unknown action %d", b.GetOnExceeded())
 	}
 	return nil
 }
@@ -314,6 +525,14 @@ func ValidateTask(t *Task) error {
 	spec := t.GetSpec()
 	if spec == nil {
 		return nil
+	}
+	if err := ValidateBudget(spec.GetBudget()); err != nil {
+		return fmt.Errorf("spec.budget.%w", err)
+	}
+	switch spec.GetOnCompletion() {
+	case CompletionPolicy_COMPLETION_POLICY_UNSPECIFIED, CompletionPolicy_KEEP, CompletionPolicy_SUSPEND_ON_EXIT:
+	default:
+		return fmt.Errorf("spec.onCompletion: unknown policy %d", spec.GetOnCompletion())
 	}
 	refs := spec.WorkspaceRefs()
 	paths := spec.WorkspacePaths()

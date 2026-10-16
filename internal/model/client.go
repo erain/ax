@@ -138,11 +138,11 @@ type GenerateRequest struct {
 type GenerateResponse struct {
 	Model   string     `json:"model"`
 	Content string     `json:"content"`
-	Usage   UsageStats `json:"usage"`
+	Usage   TokenUsage `json:"usage"`
 }
 
-// UsageStats provides token counts for the inference call.
-type UsageStats struct {
+// TokenUsage provides token counts for the inference call.
+type TokenUsage struct {
 	PromptTokens     int `json:"promptTokens"`
 	CompletionTokens int `json:"completionTokens"`
 	TotalTokens      int `json:"totalTokens"`
@@ -597,7 +597,7 @@ func (c *Client) generateGoogle(ctx context.Context, req *GenerateRequest) (*Gen
 	return &GenerateResponse{
 		Model:   req.Model,
 		Content: textBuilder.String(),
-		Usage: UsageStats{
+		Usage: TokenUsage{
 			PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
@@ -613,7 +613,7 @@ func (c *Client) fallbackResponse(req *GenerateRequest) *GenerateResponse {
 	return &GenerateResponse{
 		Model:   req.Model,
 		Content: content,
-		Usage: UsageStats{
+		Usage: TokenUsage{
 			PromptTokens:     len(req.Prompt) / 4,
 			CompletionTokens: len(content) / 4,
 			TotalTokens:      (len(req.Prompt) + len(content)) / 4,

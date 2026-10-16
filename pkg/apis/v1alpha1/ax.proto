@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ax.v1alpha1;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -34,6 +35,10 @@ service AX {
   rpc SuspendTask(SuspendTaskRequest) returns (Task);
   rpc ResumeTask(ResumeTaskRequest) returns (Task);
   rpc WatchTask(WatchTaskRequest) returns (stream WatchTaskResponse);
+
+  // Usage
+  // ListUsage returns per-task, per-day (UTC) usage and cost records.
+  rpc ListUsage(ListUsageRequest) returns (ListUsageResponse);
 
 
   // Workspaces
@@ -55,6 +60,10 @@ message ObjectMeta {
   string name = 1;
   string atespace = 2;
   google.protobuf.Timestamp creation_timestamp = 3;
+  // labels are key/value pairs used to group and select resources, for example
+  // for cost attribution (`agent`, `customer`). They follow Kubernetes label
+  // syntax.
+  map<string, string> labels = 4;
 }
 
 // --- Task ---
@@ -78,6 +87,48 @@ message TaskSpec {
   // debug enables the in-container guest services (process execution and file
   // access) that back `ax ssh`. Off by default.
   bool debug = 6;
+  // budget sets soft limits on the task's resource and model usage.
+  BudgetSpec budget = 7;
+  // on_completion controls what happens once the task command exits.
+  CompletionPolicy on_completion = 8;
+}
+
+// BudgetSpec sets soft limits on a task. Crossing warn_at_percent of any limit
+// raises a BudgetWarning condition; reaching a limit raises BudgetExceeded.
+message BudgetSpec {
+  // active_deadline limits the time the task spends running.
+  google.protobuf.Duration active_deadline = 1;
+  // max_tokens limits the total model tokens of all kinds.
+  int64 max_tokens = 2;
+  // max_cost limits the total cost (compute + tokens + storage).
+  Money max_cost = 3;
+  // warn_at_percent is the percentage of a limit at which to warn. Zero uses
+  // the server default.
+  int32 warn_at_percent = 4;
+  ExceededAction on_exceeded = 5;
+}
+
+message Money {
+  string currency = 1;
+  double amount = 2;
+}
+
+// ExceededAction is what happens when a budget limit is reached.
+enum ExceededAction {
+  EXCEEDED_ACTION_UNSPECIFIED = 0;
+  // WARN only records the BudgetExceeded condition.
+  WARN = 1;
+  // SUSPEND suspends the task. Not supported yet.
+  SUSPEND = 2;
+}
+
+// CompletionPolicy is what happens to a task once its command exits.
+enum CompletionPolicy {
+  COMPLETION_POLICY_UNSPECIFIED = 0;
+  // KEEP leaves the task running.
+  KEEP = 1;
+  // SUSPEND_ON_EXIT suspends the task and marks it Completed.
+  SUSPEND_ON_EXIT = 2;
 }
 
 message EnvVar {
@@ -107,20 +158,53 @@ message TaskStatus {
   string actor = 3;
   // json_name keeps the established `workerIP` spelling in YAML and JSON.
   string worker_ip = 4 [json_name = "workerIP"];
-  PendingApproval pending_approval = 5;
-  UsageStats usage = 6;
+  // Fields 5 and 6 were pending_approval and an int32 token-count usage.
+  reserved 5, 6;
+  reserved "pending_approval";
   repeated Condition conditions = 7;
+  // actor_uid is the Substrate actor UID backing the current actor.
+  string actor_uid = 8;
+  // usage is the task's lifetime resource usage and cost.
+  UsageStatus usage = 9;
 }
 
-message PendingApproval {
-  string id = 1;
-  string action = 2;
-  google.protobuf.Timestamp requested_at = 3;
+// UsageStatus is a task's accumulated resource usage and cost.
+message UsageStatus {
+  // active_duration is the time the task's actor spent running.
+  google.protobuf.Duration active_duration = 1;
+  double cpu_seconds = 2;
+  double memory_gib_seconds = 3;
+  // workspace_bytes is the latest reported size of the workspace.
+  int64 workspace_bytes = 4;
+  // idle_duration is the part of active_duration the task spent idle.
+  google.protobuf.Duration idle_duration = 5;
+  // tokens is per-model token usage, sorted by model.
+  repeated ModelTokenUsage tokens = 6;
+  CostBreakdown cost = 7;
+  google.protobuf.Timestamp update_time = 8;
 }
 
-message UsageStats {
-  int32 prompt_tokens = 1;
-  int32 completion_tokens = 2;
+message ModelTokenUsage {
+  string model = 1;
+  int64 input = 2;
+  int64 output = 3;
+  int64 cache_read = 4;
+  int64 cache_write = 5;
+  int64 reasoning = 6;
+}
+
+// CostBreakdown splits a cost by kind. total = compute + tokens + storage;
+// idle is the part of compute spent while idle, shown separately.
+message CostBreakdown {
+  string currency = 1;
+  double total = 2;
+  double compute = 3;
+  double tokens = 4;
+  double storage = 5;
+  double idle = 6;
+  // tokens_partially_unpriced is set when some tokens used a model missing
+  // from the rate card and were not priced.
+  bool tokens_partially_unpriced = 7;
 }
 
 message Condition {
@@ -229,6 +313,9 @@ message ListTasksRequest {
   string atespace = 1;
   int64 limit = 2;
   int64 offset = 3;
+  // label_selector filters tasks by labels: comma-separated `key=value`
+  // equality terms, all of which must match. Empty selects all tasks.
+  string label_selector = 4;
 }
 
 message ListTasksResponse {
@@ -264,6 +351,38 @@ message WatchTaskRequest {
 message WatchTaskResponse {
   Task task = 1;
   string action = 2;
+}
+
+// Usage
+message ListUsageRequest {
+  string atespace = 1;
+  // label_selector has the same syntax as ListTasksRequest.label_selector.
+  string label_selector = 2;
+  // start_date and end_date bound the UTC days returned, as YYYY-MM-DD,
+  // inclusive. Empty means unbounded.
+  string start_date = 3;
+  string end_date = 4;
+}
+
+message ListUsageResponse {
+  repeated DailyUsage days = 1;
+}
+
+// DailyUsage is one task's usage and cost on one UTC day.
+message DailyUsage {
+  string atespace = 1;
+  string task = 2;
+  string task_uid = 3;
+  map<string, string> labels = 4;
+  // date is the UTC day, as YYYY-MM-DD.
+  string date = 5;
+  double cpu_seconds = 6;
+  double memory_gib_seconds = 7;
+  double active_seconds = 8;
+  double idle_seconds = 9;
+  double storage_gib_seconds = 10;
+  repeated ModelTokenUsage tokens = 11;
+  CostBreakdown cost = 12;
 }
 
 // Workspaces

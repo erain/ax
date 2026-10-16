@@ -19,7 +19,7 @@ AX_IMAGE_REPO ?= gcr.io/ax-substrate/ate-images
 TASK_RUNNER_REPO ?= $(AX_IMAGE_REPO)/ax-task-runner
 CONTAINER_CLI ?= $(shell which podman 2>/dev/null || which docker 2>/dev/null)
 
-.PHONY: all build build-binaries build-task-runner install push push-task-runner deploy deploy-server deploy-redis apply-example test clean
+.PHONY: all build build-binaries build-task-runner install push push-task-runner deploy deploy-server deploy-redis apply-example test clean proto
 
 all: build
 
@@ -58,6 +58,30 @@ push-task-runner: build-task-runner
 
 # Build and push all images
 push: push-task-runner
+
+## --------------------------------------
+## Code Generation
+## --------------------------------------
+
+# Regenerate the API's Go code from pkg/apis/v1alpha1/ax.proto. Generated files
+# are checked in. Tool versions used for the checked-in files:
+#   protoc               v36.x  (brew install protobuf)
+#   protoc-gen-go        v1.36.11 (go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11)
+#   protoc-gen-go-grpc   v1.6.x (go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0)
+# protoc comes from PATH; the plugins are looked up on PATH with $(go env GOBIN)
+# and $(go env GOPATH)/bin appended. Well-known types (duration, timestamp,
+# struct) come from the protobuf install prefix, or protoc's bundled include.
+PROTOC ?= protoc
+PROTO_FILES := pkg/apis/v1alpha1/ax.proto
+PROTO_INCLUDE ?= $(firstword $(wildcard $(shell brew --prefix protobuf 2>/dev/null)/include $(dir $(shell which $(PROTOC) 2>/dev/null))../include))
+
+proto: export PATH := $(PATH):$(shell go env GOBIN):$(shell go env GOPATH)/bin
+proto:
+	@echo "==> Generating Go code from $(PROTO_FILES)..."
+	$(PROTOC) -I . $(if $(PROTO_INCLUDE),-I $(PROTO_INCLUDE)) \
+		--go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		$(PROTO_FILES)
 
 ## --------------------------------------
 ## Deployment Targets

@@ -15,12 +15,14 @@
 package v1alpha1_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
@@ -36,6 +38,7 @@ func fullTask() *v1alpha1.Task {
 			Name:              "full",
 			Atespace:          "default",
 			CreationTimestamp: timestamppb.New(time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)),
+			Labels:            map[string]string{"agent": "coder", "customer": "acme"},
 		},
 		Spec: &v1alpha1.TaskSpec{
 			Image:   "example.com/img:1",
@@ -46,6 +49,14 @@ func fullTask() *v1alpha1.Task {
 			},
 			Workspaces: []*v1alpha1.WorkspaceRef{{Name: "ws", Path: "/workspace", Goal: "build"}},
 			Debug:      true,
+			Budget: &v1alpha1.BudgetSpec{
+				ActiveDeadline: durationpb.New(30 * time.Minute),
+				MaxTokens:      100000,
+				MaxCost:        &v1alpha1.Money{Currency: "USD", Amount: 1.2},
+				WarnAtPercent:  75,
+				OnExceeded:     v1alpha1.ExceededAction_WARN,
+			},
+			OnCompletion: v1alpha1.CompletionPolicy_SUSPEND_ON_EXIT,
 		},
 		Status: &v1alpha1.TaskStatus{
 			Phase:    "Running",
@@ -59,6 +70,22 @@ func fullTask() *v1alpha1.Task {
 				Message:            "ok",
 				LastTransitionTime: timestamppb.New(time.Date(2026, 9, 19, 12, 5, 0, 0, time.UTC)),
 			}},
+			ActorUid: "uid-1",
+			Usage: &v1alpha1.UsageStatus{
+				ActiveDuration:   durationpb.New(90 * time.Second),
+				CpuSeconds:       12.5,
+				MemoryGibSeconds: 45.25,
+				WorkspaceBytes:   1 << 20,
+				IdleDuration:     durationpb.New(30 * time.Second),
+				Tokens: []*v1alpha1.ModelTokenUsage{{
+					Model: "gemini-2.5-flash", Input: 1200, Output: 300, CacheRead: 100, CacheWrite: 10, Reasoning: 50,
+				}},
+				Cost: &v1alpha1.CostBreakdown{
+					Currency: "USD", Total: 0.0123, Compute: 0.002, Tokens: 0.01, Storage: 0.0003, Idle: 0.0005,
+					TokensPartiallyUnpriced: true,
+				},
+				UpdateTime: timestamppb.New(time.Date(2026, 9, 19, 12, 6, 0, 0, time.UTC)),
+			},
 		},
 	}
 }
@@ -593,5 +620,278 @@ func TestValidateWorkspace_Files(t *testing.T) {
 	}
 	if err := v1alpha1.ValidateWorkspace(ws); err == nil || !strings.Contains(err.Error(), "spec.files[0]: path is required") {
 		t.Errorf("expected path is required error, got %v", err)
+	}
+}
+
+func TestTask_FinOpsYAML(t *testing.T) {
+	const manifest = `
+apiVersion: ax.io/v1alpha1
+kind: Task
+metadata:
+  name: labeled
+  labels:
+    agent: coder
+    customer: acme
+spec:
+  budget:
+    activeDeadline: 30m
+    maxTokens: 100000
+    maxCost: {amount: 1.2, currency: USD}
+    warnAtPercent: 80
+    onExceeded: WARN
+  onCompletion: SUSPEND_ON_EXIT
+status:
+  actorUid: uid-1
+  usage:
+    activeDuration: 90s
+    cpuSeconds: 12.5
+    workspaceBytes: 2048
+    tokens:
+    - model: gemini-2.5-flash
+      input: 1200
+      cacheRead: 100
+    cost: {currency: USD, total: 0.5, compute: 0.1, tokens: 0.4, idle: 0.05}
+`
+	var task v1alpha1.Task
+	if err := yaml.Unmarshal([]byte(manifest), &task); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:   "labeled",
+			Labels: map[string]string{"agent": "coder", "customer": "acme"},
+		},
+		Spec: &v1alpha1.TaskSpec{
+			Budget: &v1alpha1.BudgetSpec{
+				ActiveDeadline: durationpb.New(30 * time.Minute),
+				MaxTokens:      100000,
+				MaxCost:        &v1alpha1.Money{Currency: "USD", Amount: 1.2},
+				WarnAtPercent:  80,
+				OnExceeded:     v1alpha1.ExceededAction_WARN,
+			},
+			OnCompletion: v1alpha1.CompletionPolicy_SUSPEND_ON_EXIT,
+		},
+		Status: &v1alpha1.TaskStatus{
+			ActorUid: "uid-1",
+			Usage: &v1alpha1.UsageStatus{
+				ActiveDuration: durationpb.New(90 * time.Second),
+				CpuSeconds:     12.5,
+				WorkspaceBytes: 2048,
+				Tokens:         []*v1alpha1.ModelTokenUsage{{Model: "gemini-2.5-flash", Input: 1200, CacheRead: 100}},
+				Cost:           &v1alpha1.CostBreakdown{Currency: "USD", Total: 0.5, Compute: 0.1, Tokens: 0.4, Idle: 0.05},
+			},
+		},
+	}
+	if !proto.Equal(want, &task) {
+		t.Fatalf("decoded task mismatch:\ngot  %v\nwant %v", &task, want)
+	}
+	if err := v1alpha1.ValidateTask(&task); err != nil {
+		t.Fatalf("ValidateTask: %v", err)
+	}
+
+	out, err := yaml.Marshal(&task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, key := range []string{
+		"labels:", "agent: coder", "budget:", "activeDeadline: 1800s", "maxTokens: 100000",
+		"maxCost:", "currency: USD", "amount: 1.2", "warnAtPercent: 80", "onExceeded: WARN",
+		"onCompletion: SUSPEND_ON_EXIT", "actorUid: uid-1", "usage:", "activeDuration: 90s",
+		"cpuSeconds: 12.5", "workspaceBytes: 2048", "model: gemini-2.5-flash", "input: 1200",
+		"cacheRead: 100", "cost:", "total: 0.5",
+	} {
+		if !strings.Contains(s, key) {
+			t.Errorf("yaml missing %q:\n%s", key, s)
+		}
+	}
+	var again v1alpha1.Task
+	if err := yaml.Unmarshal(out, &again); err != nil {
+		t.Fatalf("re-unmarshal: %v\n%s", err, out)
+	}
+	if !proto.Equal(&task, &again) {
+		t.Errorf("yaml round trip changed the task\n%s", out)
+	}
+}
+
+func TestTask_YAMLRemovedStatusFields(t *testing.T) {
+	for _, doc := range []string{
+		"status:\n  pendingApproval: {id: x}\n",
+		"status:\n  usage: {promptTokens: 1}\n",
+	} {
+		var task v1alpha1.Task
+		if err := yaml.Unmarshal([]byte(doc), &task); err == nil {
+			t.Errorf("expected %q to be rejected", doc)
+		}
+	}
+}
+
+func TestValidateLabels(t *testing.T) {
+	long := strings.Repeat("a", 64)
+	tests := []struct {
+		name    string
+		labels  map[string]string
+		wantErr string
+	}{
+		{name: "nil"},
+		{name: "simple", labels: map[string]string{"agent": "coder", "customer": "acme"}},
+		{name: "empty value", labels: map[string]string{"agent": ""}},
+		{name: "mixed case and punctuation", labels: map[string]string{"Team_Name.v2": "My-Value_1.0"}},
+		{name: "prefixed key", labels: map[string]string{"ax.io/agent": "coder"}},
+		{name: "max lengths", labels: map[string]string{strings.Repeat("k", 63): strings.Repeat("v", 63)}},
+		{name: "empty key", labels: map[string]string{"": "x"}, wantErr: `invalid key ""`},
+		{name: "key too long", labels: map[string]string{long: "x"}, wantErr: "invalid key"},
+		{name: "key bad char", labels: map[string]string{"a b": "x"}, wantErr: "invalid key"},
+		{name: "key leading dash", labels: map[string]string{"-a": "x"}, wantErr: "invalid key"},
+		{name: "empty prefix", labels: map[string]string{"/a": "x"}, wantErr: "prefix"},
+		{name: "uppercase prefix", labels: map[string]string{"AX.io/a": "x"}, wantErr: "prefix"},
+		{name: "prefix too long", labels: map[string]string{strings.Repeat("a", 254) + "/a": "x"}, wantErr: "prefix"},
+		{name: "empty name after prefix", labels: map[string]string{"ax.io/": "x"}, wantErr: "name must be"},
+		{name: "two slashes", labels: map[string]string{"ax.io/a/b": "x"}, wantErr: "name must be"},
+		{name: "value too long", labels: map[string]string{"a": long}, wantErr: `label "a": invalid value`},
+		{name: "value trailing dot", labels: map[string]string{"a": "x."}, wantErr: "invalid value"},
+		{name: "value slash", labels: map[string]string{"a": "x/y"}, wantErr: "invalid value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v1alpha1.ValidateLabels(tt.labels)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+
+			// ValidateTask reports label problems under metadata.labels.
+			err = v1alpha1.ValidateTask(&v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "t", Labels: tt.labels}})
+			if (err != nil) != (tt.wantErr != "") {
+				t.Fatalf("ValidateTask error = %v, wantErr %v", err, tt.wantErr != "")
+			}
+			if err != nil && !strings.HasPrefix(err.Error(), "metadata.labels: ") {
+				t.Errorf("ValidateTask error %q lacks metadata.labels prefix", err)
+			}
+		})
+	}
+}
+
+func TestValidateTask_Budget(t *testing.T) {
+	tests := []struct {
+		name         string
+		budget       *v1alpha1.BudgetSpec
+		onCompletion v1alpha1.CompletionPolicy
+		wantErr      string
+	}{
+		{name: "no budget"},
+		{name: "empty budget", budget: &v1alpha1.BudgetSpec{}},
+		{name: "full budget", budget: &v1alpha1.BudgetSpec{
+			ActiveDeadline: durationpb.New(time.Hour),
+			MaxTokens:      1000,
+			MaxCost:        &v1alpha1.Money{Currency: "USD", Amount: 2},
+			WarnAtPercent:  100,
+			OnExceeded:     v1alpha1.ExceededAction_WARN,
+		}},
+		{name: "cost without currency", budget: &v1alpha1.BudgetSpec{MaxCost: &v1alpha1.Money{Amount: 0.5}}},
+		{name: "keep on completion", onCompletion: v1alpha1.CompletionPolicy_KEEP},
+		{name: "suspend on exit", onCompletion: v1alpha1.CompletionPolicy_SUSPEND_ON_EXIT},
+		{
+			name:    "negative deadline",
+			budget:  &v1alpha1.BudgetSpec{ActiveDeadline: durationpb.New(-time.Second)},
+			wantErr: "spec.budget.activeDeadline: must not be negative",
+		},
+		{
+			name:    "invalid deadline",
+			budget:  &v1alpha1.BudgetSpec{ActiveDeadline: &durationpb.Duration{Seconds: 1, Nanos: -1}},
+			wantErr: "spec.budget.activeDeadline",
+		},
+		{
+			name:    "negative tokens",
+			budget:  &v1alpha1.BudgetSpec{MaxTokens: -1},
+			wantErr: "spec.budget.maxTokens: must not be negative",
+		},
+		{
+			name:    "negative cost",
+			budget:  &v1alpha1.BudgetSpec{MaxCost: &v1alpha1.Money{Amount: -0.01}},
+			wantErr: "spec.budget.maxCost.amount",
+		},
+		{
+			name:    "NaN cost",
+			budget:  &v1alpha1.BudgetSpec{MaxCost: &v1alpha1.Money{Amount: math.NaN()}},
+			wantErr: "spec.budget.maxCost.amount",
+		},
+		{
+			name:    "other currency",
+			budget:  &v1alpha1.BudgetSpec{MaxCost: &v1alpha1.Money{Currency: "EUR", Amount: 1}},
+			wantErr: `spec.budget.maxCost.currency: only USD is supported, got "EUR"`,
+		},
+		{
+			name:    "warn percent negative",
+			budget:  &v1alpha1.BudgetSpec{WarnAtPercent: -1},
+			wantErr: "spec.budget.warnAtPercent",
+		},
+		{
+			name:    "warn percent over 100",
+			budget:  &v1alpha1.BudgetSpec{WarnAtPercent: 101},
+			wantErr: "spec.budget.warnAtPercent",
+		},
+		{
+			name:    "suspend not supported",
+			budget:  &v1alpha1.BudgetSpec{OnExceeded: v1alpha1.ExceededAction_SUSPEND},
+			wantErr: "spec.budget.onExceeded: SUSPEND is not supported yet",
+		},
+		{
+			name:    "unknown action",
+			budget:  &v1alpha1.BudgetSpec{OnExceeded: v1alpha1.ExceededAction(9)},
+			wantErr: "spec.budget.onExceeded: unknown action",
+		},
+		{
+			name:         "unknown completion policy",
+			onCompletion: v1alpha1.CompletionPolicy(9),
+			wantErr:      "spec.onCompletion: unknown policy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v1alpha1.ValidateTask(&v1alpha1.Task{
+				Metadata: &v1alpha1.ObjectMeta{Name: "task"},
+				Spec:     &v1alpha1.TaskSpec{Budget: tt.budget, OnCompletion: tt.onCompletion},
+			})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestTask_ActiveDeadlineFormats(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"30m":    30 * time.Minute,
+		"1h30m":  90 * time.Minute,
+		"1800s":  30 * time.Minute,
+		"1.5s":   1500 * time.Millisecond,
+		"250ms":  250 * time.Millisecond,
+		"0.001s": time.Millisecond,
+	} {
+		var task v1alpha1.Task
+		doc := "spec:\n  budget:\n    activeDeadline: " + in + "\n"
+		if err := yaml.Unmarshal([]byte(doc), &task); err != nil {
+			t.Errorf("%s: %v", in, err)
+			continue
+		}
+		if got := task.GetSpec().GetBudget().GetActiveDeadline().AsDuration(); got != want {
+			t.Errorf("%s: got %v, want %v", in, got, want)
+		}
+	}
+	var task v1alpha1.Task
+	if err := yaml.Unmarshal([]byte("spec:\n  budget:\n    activeDeadline: soon\n"), &task); err == nil {
+		t.Error("expected an invalid duration to be rejected")
 	}
 }
