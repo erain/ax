@@ -161,6 +161,12 @@ const maxEpochs = 8
 // cfg.IdleCPUThreshold) has lasted cfg.IdleAfter. A sample while the actor
 // state is still unknown opens an active interval at the sample time; an open
 // active interval is accrued up to the sample time.
+//
+// Persist the record after every Apply* call, even when the returned Delta is
+// zero: the call may still have advanced accounting state (last sample per
+// epoch, open interval, actor uid, runner session/baseline, LastPullTime,
+// WorkspaceBytes, CommandExited). Do not return ErrNoChange based on
+// Delta.IsZero().
 func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta {
 	var d Delta
 	if s.Time.IsZero() || !u.acceptUID(s.ActorUID) {
@@ -190,7 +196,7 @@ func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta 
 
 	// Active time.
 	if st.State == "" && st.ActiveSince.IsZero() {
-		st.ActiveSince, st.ActiveAccruedTo = s.Time, s.Time
+		u.openActive(&d, s.Time)
 	}
 	u.accrueActive(&d, s.Time)
 
@@ -213,10 +219,12 @@ func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta 
 		start := s.Time.Add(-dt)
 		wsGiB := workingSetGiB(prev.WorkingSetBytes, s.WorkingSetBytes)
 
-		// Idle classification.
+		// Idle classification. Only the current epoch drives the low-cpu
+		// streak: a late sample of an older epoch must not start or reset
+		// the streak of the current activation.
 		idle := false
 		var idleFrom time.Time
-		if prev.CPUSeconds != nil && s.CPUSeconds != nil {
+		if s.Epoch == st.CurrentEpoch && prev.CPUSeconds != nil && s.CPUSeconds != nil {
 			rate := max(0, *s.CPUSeconds-*prev.CPUSeconds) / raw.Seconds()
 			if rate < cfg.IdleCPUThreshold {
 				if st.IdleStreakStart.IsZero() {
@@ -310,6 +318,33 @@ func (u *TaskUsage) accrueActive(d *Delta, t time.Time) {
 	st.ActiveAccruedTo = t
 }
 
+// openActive opens the active interval at r. If r is past the high-water
+// mark a new covered range starts at r; otherwise only the part of
+// [r, ActiveCoveredFrom) not yet accounted is added (a late RUNNING event for
+// an interval that samples already accounted).
+func (u *TaskUsage) openActive(d *Delta, r time.Time) {
+	st := &u.State
+	if st.ActiveAccruedTo.IsZero() || r.After(st.ActiveAccruedTo) {
+		st.ActiveCoveredFrom, st.ActiveAccruedTo = r, r
+	} else {
+		u.extendActiveBack(d, r)
+	}
+	st.ActiveSince = r
+}
+
+// extendActiveBack accounts [r, ActiveCoveredFrom) when r is earlier than the
+// covered range.
+func (u *TaskUsage) extendActiveBack(d *Delta, r time.Time) {
+	st := &u.State
+	if st.ActiveCoveredFrom.IsZero() || !r.Before(st.ActiveCoveredFrom) {
+		return
+	}
+	forEachDay(r, st.ActiveCoveredFrom, func(date string, from, to time.Time) {
+		d.day(date).ActiveSeconds += to.Sub(from).Seconds()
+	})
+	st.ActiveCoveredFrom = r
+}
+
 // accrueStorage accounts WorkspaceBytes × Δt since the last accrual up to t.
 func (u *TaskUsage) accrueStorage(d *Delta, t time.Time) {
 	st := &u.State
@@ -333,6 +368,12 @@ func (u *TaskUsage) accrueStorage(d *Delta, t time.Time) {
 // increment. "running" opens an active interval; any other state closes it.
 // Events not newer than the last applied state event are ignored (replays,
 // reordering). Storage is accrued up to the event time.
+//
+// Persist the record after every Apply* call, even when the returned Delta is
+// zero: the call may still have advanced accounting state (last sample per
+// epoch, open interval, actor uid, runner session/baseline, LastPullTime,
+// WorkspaceBytes, CommandExited). Do not return ErrNoChange based on
+// Delta.IsZero().
 func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
 	var d Delta
 	state := NormalizeState(e.State)
@@ -345,22 +386,21 @@ func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
 	}
 	u.accrueStorage(&d, e.Time)
 	if state == StateRunning {
-		switch {
-		case st.ActiveSince.IsZero():
-			st.ActiveSince, st.ActiveAccruedTo = e.Time, e.Time
-		case st.State == "" && e.Time.Before(st.ActiveSince):
-			// The interval was opened by a sample before the RUNNING event
-			// arrived; extend it back to the real start.
-			forEachDay(e.Time, st.ActiveSince, func(date string, from, to time.Time) {
-				d.day(date).ActiveSeconds += to.Sub(from).Seconds()
-			})
-			st.ActiveSince = e.Time
-		default:
+		if st.ActiveSince.IsZero() {
+			u.openActive(&d, e.Time)
+		} else {
+			// Already open (e.g. by a sample before any state event): extend
+			// back to the real start if earlier, else accrue up to e.Time.
+			u.extendActiveBack(&d, e.Time)
+			if e.Time.Before(st.ActiveSince) {
+				st.ActiveSince = e.Time
+			}
 			u.accrueActive(&d, e.Time)
 		}
 	} else {
 		u.accrueActive(&d, e.Time)
-		st.ActiveSince, st.ActiveAccruedTo = time.Time{}, time.Time{}
+		// Close; ActiveCoveredFrom/ActiveAccruedTo stay as the high-water mark.
+		st.ActiveSince = time.Time{}
 		st.IdleStreakStart = time.Time{}
 	}
 	st.State, st.StateTime = state, e.Time
@@ -377,7 +417,14 @@ func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
 // last values if every model's counters are >= them (same counters file),
 // else against zero. Reported provider cost passes through in
 // DayDelta.ProviderCost. Storage accrues the previous WorkspaceBytes up to
-// the report time. Reports older than the last applied one are ignored.
+// the report time. Reports older than the last applied one are ignored (only
+// LastPullTime advances).
+//
+// Persist the record after every Apply* call, even when the returned Delta is
+// zero: the call may still have advanced accounting state (last sample per
+// epoch, open interval, actor uid, runner session/baseline, LastPullTime,
+// WorkspaceBytes, CommandExited). Do not return ErrNoChange based on
+// Delta.IsZero().
 func (u *TaskUsage) ApplyRunnerReport(r RunnerReport, now time.Time) Delta {
 	var d Delta
 	st := &u.State

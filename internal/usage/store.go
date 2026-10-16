@@ -25,7 +25,10 @@ var (
 	// ErrNotFound is returned by Store.Get for a key without usage.
 	ErrNotFound = errors.New("usage: not found")
 	// ErrNoChange may be returned by an Update callback to skip the write;
-	// Update then returns nil.
+	// Update then returns nil. Use it only when the callback did not apply
+	// anything (e.g. the input belongs to no task); a zero Delta from an
+	// Apply* method is NOT such a case, since accounting state may have
+	// advanced.
 	ErrNoChange = errors.New("usage: no change")
 )
 
