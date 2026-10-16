@@ -11,7 +11,8 @@ per-task summary logs. This is a PoC feature.
 | `--otlp-addr` | `:4318` | OTLP/HTTP listener for Substrate usage events (`POST /v1/logs`, plus `GET /healthz`). Empty disables the ingestor. |
 | `--rate-card` | (empty) | Rate card YAML path. The file is re-read when it changes (checked at most every 10s), and an invalid edit keeps the previous card. Empty uses a built-in card that prices nothing (usage is still recorded; tokens are flagged partially unpriced). |
 | `--usage-pull-interval` | `60s` | How often runner token usage is pulled from Running tasks. `0` disables periodic pulls; Suspend/Delete still flush. |
-| `--runner-port` | `80` | Port of the task runner's `GET /usage`. |
+| `--runner-port` | `80` | Port of the task runner's `GET /usage` (direct pulls only). |
+| `--usage-router-addr` | `$ATENET_ROUTER_ADDR` | Pull runner usage through the Substrate atenet-router (`GET http://<addr>/usage`, header `ate-target-actor: <atespace>/<task>`). Required on Substrate v0.5.0, whose workers do not expose actor ports on the pod IP. Empty = direct `GET <workerIP>:<runner-port>/usage`. |
 | `--summary-interval` | `10m` | How often an `ax.task.usage_summary` line is logged per Running task. Budget and Idle conditions are re-checked on the same tick. `0` disables. |
 | `--default-task-image` | `gcr.io/ax-substrate/ate-images/ax-task-runner` | Runner image for tasks without `spec.image`. |
 | `--redis-addr` | `localhost:6379` | Task store, locks and usage store (`ax:usage:{atespace}:{name}`) share this Redis. Empty uses in-memory stores: a single replica for development only. |
@@ -28,7 +29,7 @@ because metrics reach the managed collector through the sidecar collector.
 ```
 Substrate ateapi/ateom --OTLP--> otel-collector --(filtered ate.actor.* logs)--> ax-server :4318 /v1/logs
                                                                                  (CPU, memory, active/idle time)
-task runner GET http://<workerIP>:<runner-port>/usage  <--pull every 60s + on Suspend/Delete-- ax-server
+task runner GET /usage (via atenet-router, or <workerIP>:<runner-port>)  <--pull every 60s + on Suspend/Delete-- ax-server
                                                                                  (tokens per model, workspace bytes)
                      both --> usage.Store.Update (accounting + pricing, per UTC day)
                                ├─ hooks (non-zero deltas): OTel metrics + budget check

@@ -189,7 +189,15 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, extraEnv)
 
 		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, extraEnv)
-		if err != nil {
+		if err != nil && status.Code(err) == codes.InvalidArgument {
+			// Substrate rejected the template itself (for example, v0.5.0
+			// requires digest-pinned images). The default template would not
+			// run the requested image either, so report the real reason
+			// instead of a confusing "actor template not found".
+			r.setNotReady(task, "ActorTemplateInvalid", err.Error(), now)
+			task.Status.Phase = "Failed"
+			return task, fmt.Errorf("creating actor template: %w", err)
+		} else if err != nil {
 			slog.Warn("could not create custom ActorTemplate, falling back to default template", "error", err)
 		} else if tmpl != nil && tmpl.Metadata != nil {
 			templateAtespace = tmpl.Metadata.Atespace

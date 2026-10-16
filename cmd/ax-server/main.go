@@ -88,6 +88,7 @@ func run(parent context.Context, args []string) error {
 		rateCardPath            string
 		usagePullInterval       time.Duration
 		runnerPort              int
+		runnerRouterAddr        string
 		summaryInterval         time.Duration
 	)
 
@@ -107,7 +108,8 @@ func run(parent context.Context, args []string) error {
 	fs.StringVar(&otlpAddr, "otlp-addr", ":4318", "OTLP/HTTP listen address for Substrate usage events (POST /v1/logs); empty disables the ingestor")
 	fs.StringVar(&rateCardPath, "rate-card", "", "Path to the rate card YAML (reloaded on change); empty uses a built-in zero-price card")
 	fs.DurationVar(&usagePullInterval, "usage-pull-interval", puller.DefaultInterval, "How often runner token usage is pulled from Running tasks; 0 disables periodic pulls (Suspend/Delete still flush)")
-	fs.IntVar(&runnerPort, "runner-port", puller.DefaultPort, "Port of the task runner's GET /usage endpoint")
+	fs.IntVar(&runnerPort, "runner-port", puller.DefaultPort, "Port of the task runner's GET /usage endpoint (direct pulls only)")
+	fs.StringVar(&runnerRouterAddr, "usage-router-addr", os.Getenv("ATENET_ROUTER_ADDR"), "If set (host:port, default $ATENET_ROUTER_ADDR), pull runner usage through the Substrate atenet-router with the ate-target-actor header instead of GET <workerIP>:<runner-port>; empty pulls directly")
 	fs.DurationVar(&summaryInterval, "summary-interval", metrics.DefaultSummaryInterval, "How often ax.task.usage_summary lines are logged for Running tasks (budget/Idle conditions are re-checked too); 0 disables")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -220,7 +222,7 @@ func run(parent context.Context, args []string) error {
 	})
 	// The puller also serves Flush (before Suspend/Delete), so it is created
 	// even when periodic pulls are disabled.
-	usagePuller := srv.NewUsagePuller(puller.Options{Interval: usagePullInterval, Port: runnerPort})
+	usagePuller := srv.NewUsagePuller(puller.Options{Interval: usagePullInterval, Port: runnerPort, RouterAddr: runnerRouterAddr})
 
 	apiLn, err := net.Listen("tcp", listenAddr)
 	if err != nil {
