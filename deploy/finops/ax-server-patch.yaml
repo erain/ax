@@ -38,6 +38,9 @@ spec:
             - "--rate-card=/etc/ax/ratecard.yaml"
             - "--usage-pull-interval=60s"
             - "--runner-port=80"
+            # Substrate v0.5.0 workers do not expose actor ports on the pod IP;
+            # pull runner usage through atenet-router (ate-target-actor header).
+            - "--usage-router-addr=atenet-router.ate-system.svc.cluster.local:80"
             - "--summary-interval=10m"
             # Tasks without spec.image use the FinOps runner image (the
             # built-in gcr.io default is not pullable from this cluster).

@@ -921,3 +921,53 @@ func (s *syncBuffer) Reset() {
 	defer s.mu.Unlock()
 	s.b.Reset()
 }
+
+// With RouterAddr, pulls go to the router with the ate-target-actor header
+// (Substrate v0.5.0 does not expose actor ports on the worker pod IP).
+func TestPull_ViaRouter(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		targets []string
+		paths   []string
+	)
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		targets = append(targets, r.Header.Get(TargetActorHeader))
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = io.WriteString(w, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 7}}))
+	}))
+	defer router.Close()
+
+	store := usage.NewMemoryStore()
+	tk := task("t1", PhaseRunning, "10.0.0.9") // worker IP is never dialed
+	tk.Metadata.Atespace = "team-a"
+	p := New(Options{
+		Tasks:      &staticLister{tasks: []*v1alpha1.Task{tk, task("t2", "Suspended", "10.0.0.9")}},
+		Store:      store,
+		RouterAddr: router.Listener.Addr().String(),
+		Timeout:    time.Second,
+		Logger:     quietLogger(),
+	})
+	p.Sweep(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(targets) != 1 || targets[0] != "team-a/t1" || paths[0] != "GET /usage" {
+		t.Fatalf("router requests = %v %v, want one GET /usage for team-a/t1", paths, targets)
+	}
+	u, err := store.Get(context.Background(), usage.Key{Atespace: "team-a", Name: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Tokens["m"].Input; got != 7 {
+		t.Errorf("input tokens = %d, want 7", got)
+	}
+	// A task without a valid worker IP is still not pulled.
+	if err := p.Flush(context.Background(), task("t3", PhaseRunning, "")); err != nil {
+		t.Errorf("Flush without worker IP = %v, want nil", err)
+	}
+	if len(targets) != 1 {
+		t.Errorf("router requests after Flush = %d, want 1", len(targets))
+	}
+}

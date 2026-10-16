@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package puller periodically pulls cumulative token usage reports from the
-// task runners (GET http://<workerIP>:<port>/usage) and folds them into the
+// task runners (GET http://<workerIP>:<port>/usage, or through the Substrate
+// atenet-router with the ate-target-actor header) and folds them into the
 // usage store, pricing every increment and notifying hooks.
 package puller
 
@@ -47,6 +48,8 @@ const (
 	DefaultConcurrency = 8
 	// UsagePath is the runner endpoint serving the cumulative usage report.
 	UsagePath = "/usage"
+	// TargetActorHeader selects the actor when pulling through atenet-router.
+	TargetActorHeader = "ate-target-actor"
 	// PhaseRunning is the only task phase whose runner is contacted.
 	PhaseRunning = "Running"
 
@@ -85,8 +88,16 @@ type Options struct {
 	Client *http.Client
 	// Interval is the sweep period (default 60s).
 	Interval time.Duration
-	// Port is the runner probe port (default 80).
+	// Port is the runner probe port (default 80). Ignored with RouterAddr.
 	Port int
+	// RouterAddr, if set (host:port), sends pulls through the Substrate
+	// atenet-router (GET http://<RouterAddr>/usage with header
+	// ate-target-actor: <atespace>/<task>) instead of to <workerIP>:<Port>.
+	// Substrate v0.5.0 workers do not expose actor ports on the pod IP (the
+	// router reaches actors through the worker's atunnel on :443), so this is
+	// required there. The router routes plain HTTP to actor port 80 and
+	// resumes a suspended actor, so only Running tasks are ever pulled.
+	RouterAddr string
 	// Timeout bounds one pull, including the store update (default 5s).
 	Timeout time.Duration
 	// Concurrency bounds concurrent pulls per sweep (default 8).
@@ -175,7 +186,7 @@ func (p *Puller) Stats() Stats {
 // Run sweeps immediately and then every Interval until ctx is done. Sweeps
 // never overlap. It returns ctx.Err().
 func (p *Puller) Run(ctx context.Context) error {
-	p.o.Logger.InfoContext(ctx, "usage puller started", "interval", p.o.Interval.String(), "port", p.o.Port)
+	p.o.Logger.InfoContext(ctx, "usage puller started", "interval", p.o.Interval.String(), "port", p.o.Port, "router", p.o.RouterAddr)
 	t := time.NewTicker(p.o.Interval)
 	defer t.Stop()
 	for {
@@ -289,7 +300,7 @@ func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) (bool, error)
 	ctx, cancel := context.WithTimeout(parent, p.o.Timeout)
 	defer cancel()
 
-	r, err := p.fetch(ctx, task.GetStatus().GetWorkerIp())
+	r, err := p.fetch(ctx, task)
 	if err != nil {
 		return false, err
 	}
@@ -386,17 +397,32 @@ func checkWorkerIP(s string) (netip.Addr, error) {
 	return a, nil
 }
 
-func (p *Puller) fetch(ctx context.Context, workerIP string) (usage.RunnerReport, error) {
-	addr, err := checkWorkerIP(workerIP)
+func (p *Puller) fetch(ctx context.Context, task *v1alpha1.Task) (usage.RunnerReport, error) {
+	// The worker IP is validated in both modes: it marks a placed actor.
+	addr, err := checkWorkerIP(task.GetStatus().GetWorkerIp())
 	if err != nil {
 		return usage.RunnerReport{}, err
 	}
 	url := "http://" + netip.AddrPortFrom(addr, uint16(p.o.Port)).String() + UsagePath
+	target := ""
+	if p.o.RouterAddr != "" {
+		atespace := task.GetMetadata().GetAtespace()
+		if atespace == "" {
+			atespace = "default"
+		}
+		// The actor is named after the task.
+		target = atespace + "/" + task.GetMetadata().GetName()
+		url = "http://" + p.o.RouterAddr + UsagePath
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return usage.RunnerReport{}, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if target != "" {
+		req.Header.Set(TargetActorHeader, target)
+		url += " (actor " + target + ")"
+	}
 	resp, err := p.o.Client.Do(req)
 	if err != nil {
 		return usage.RunnerReport{}, fmt.Errorf("GET %s: %w", url, err)
