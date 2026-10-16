@@ -92,6 +92,15 @@ func main() {
 			}
 			return
 		}
+	case "cost":
+		// Same for `ax cost`: help and flag errors need no server.
+		if _, done, err := parseCostArgs(cleanArgs, os.Stdout); done || err != nil {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	// Resolve the AX server URL (auto-tunneling to active kube context if not explicitly set)
@@ -120,6 +129,8 @@ func main() {
 		err = runResume(serverURL, atespace, cleanArgs)
 	case "delete":
 		err = runDelete(serverURL, atespace, cleanArgs)
+	case "cost":
+		err = runCost(serverURL, atespace, cleanArgs, os.Stdout)
 	case "ssh":
 		err = runSSH(serverURL, atespace, kubeContext, cleanArgs)
 	default:
@@ -200,13 +211,14 @@ Usage:
 
 Available Commands:
   apply -f <file>         Apply resources (tasks, workspaces, models) from a file or stdin
-  get tasks [-l k=v,...]  List tasks, optionally filtered by label selector
+  get tasks [-l k=v,...] [--show-labels]
+                          List tasks (with COST), optionally filtered by label selector
   get task <name>         Get a specific task
   get workspaces          List workspaces
   get workspace <name>    Get a specific workspace
   get models              List models
   get model <name>        Get a specific model
-  describe task <name>    Show detailed information about a task
+  describe task <name>    Show detailed information about a task (labels, budget, usage, cost)
   describe workspace <name> Show detailed information about a workspace
   describe model <name>   Show detailed information about a model
   watch task <name>       Stream live status and condition updates for a task
@@ -217,6 +229,8 @@ Available Commands:
   delete task <name>      Delete a task
   delete workspace <name> Delete a workspace
   delete model <name>     Delete a model
+  cost summary [--by <label>] [-l k=v,...] [-o table|json]
+                          Roll up usage and cost by a task label (default "agent")
   ctx, context            Show active Kubernetes context and AX connection
   tunnel <list|stop>      Manage background tunnels to Kubernetes clusters
   version                 Print AX version
@@ -359,34 +373,45 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 	return "configured", nil
 }
 
-// parseGetArgs separates the label selector flag (-l/--selector, kubectl
-// style) from the positional arguments of `ax get`.
-func parseGetArgs(args []string) (positional []string, selector string, err error) {
+// getArgs are the parsed arguments of `ax get`.
+type getArgs struct {
+	positional []string
+	selector   string
+	showLabels bool
+}
+
+// parseGetArgs separates the flags of `ax get` (-l/--selector and
+// --show-labels, kubectl style) from its positional arguments.
+func parseGetArgs(args []string) (getArgs, error) {
+	var g getArgs
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "-l" || arg == "--selector":
 			if i+1 >= len(args) {
-				return nil, "", fmt.Errorf("flag %s requires a value (e.g. %s agent=foo,customer=bar)", arg, arg)
+				return getArgs{}, fmt.Errorf("flag %s requires a value (e.g. %s agent=foo,customer=bar)", arg, arg)
 			}
-			selector = args[i+1]
+			g.selector = args[i+1]
 			i++
 		case strings.HasPrefix(arg, "--selector="):
-			selector = strings.TrimPrefix(arg, "--selector=")
+			g.selector = strings.TrimPrefix(arg, "--selector=")
 		case strings.HasPrefix(arg, "-l="):
-			selector = strings.TrimPrefix(arg, "-l=")
+			g.selector = strings.TrimPrefix(arg, "-l=")
+		case arg == "--show-labels":
+			g.showLabels = true
 		default:
-			positional = append(positional, arg)
+			g.positional = append(g.positional, arg)
 		}
 	}
-	return positional, selector, nil
+	return g, nil
 }
 
 func runGet(serverURL, atespace string, args []string) error {
-	args, selector, err := parseGetArgs(args)
+	parsed, err := parseGetArgs(args)
 	if err != nil {
 		return err
 	}
+	args, selector := parsed.positional, parsed.selector
 	if len(args) == 0 {
 		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
 	}
@@ -399,6 +424,9 @@ func runGet(serverURL, atespace string, args []string) error {
 		if _, err := v1alpha1.ParseLabelSelector(selector); err != nil {
 			return err
 		}
+	}
+	if parsed.showLabels && ((resource != "tasks" && resource != "task") || len(args) != 1) {
+		return fmt.Errorf("--show-labels is only supported by 'ax get tasks'")
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -415,7 +443,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
 		}
-		return writeTaskTable(os.Stdout, resp.Tasks)
+		return writeTaskTable(os.Stdout, resp.Tasks, taskTableOptions{showLabels: parsed.showLabels, now: nowFunc()})
 	}
 
 	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
@@ -639,6 +667,11 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return fmt.Errorf("getting task %q: %w", name, err)
 	}
 
+	return writeTaskDescription(os.Stdout, task)
+}
+
+// writeTaskDescription writes the human-readable `ax describe task` output.
+func writeTaskDescription(out io.Writer, task *v1alpha1.Task) error {
 	taskName := ""
 	taskAtespace := ""
 	if task.Metadata != nil {
@@ -656,42 +689,36 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		conditions = task.Status.Conditions
 	}
 
-	fmt.Printf("Name:         %s\n", taskName)
-	fmt.Printf("Atespace:     %s\n", taskAtespace)
-	fmt.Printf("Phase:        %s\n", phase)
-	fmt.Printf("Actor:        %s\n", actor)
-	fmt.Printf("Worker IP:    %s\n", workerIP)
+	fmt.Fprintf(out, "Name:         %s\n", taskName)
+	fmt.Fprintf(out, "Atespace:     %s\n", taskAtespace)
+	writeTaskLabels(out, task.GetMetadata().GetLabels())
+	fmt.Fprintf(out, "Phase:        %s\n", phase)
+	fmt.Fprintf(out, "Actor:        %s\n", actor)
+	fmt.Fprintf(out, "Worker IP:    %s\n", workerIP)
 	if task.Spec != nil {
 		if refs := task.Spec.WorkspaceRefs(); len(refs) > 0 {
 			paths := task.Spec.WorkspacePaths()
-			fmt.Println("Workspaces:")
+			fmt.Fprintln(out, "Workspaces:")
 			for i, ref := range refs {
-				fmt.Printf("  - %s  path=%s", ref.Name, paths[i])
+				fmt.Fprintf(out, "  - %s  path=%s", ref.Name, paths[i])
 				if ref.Goal != "" {
-					fmt.Printf("  goal=%q", ref.Goal)
+					fmt.Fprintf(out, "  goal=%q", ref.Goal)
 				}
-				fmt.Println()
+				fmt.Fprintln(out)
 			}
 		}
 		if task.Spec.Image != "" {
-			fmt.Printf("Image:        %s\n", task.Spec.Image)
+			fmt.Fprintf(out, "Image:        %s\n", task.Spec.Image)
 		}
 		if len(task.Spec.Command) > 0 {
-			fmt.Printf("Command:      %v\n", task.Spec.Command)
+			fmt.Fprintf(out, "Command:      %v\n", task.Spec.Command)
 		}
 	}
-
-	if len(conditions) > 0 {
-		fmt.Println("\nConditions:")
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "  TYPE\tSTATUS\tREASON\tMESSAGE")
-		for _, c := range conditions {
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
-		}
-		_ = w.Flush()
+	writeTaskBudget(out, task.GetSpec().GetBudget())
+	if err := writeTaskUsage(out, task.GetStatus().GetUsage()); err != nil {
+		return err
 	}
-
-	return nil
+	return writeTaskConditions(out, conditions)
 }
 
 func runWatch(serverURL, atespace string, args []string) error {
@@ -1179,11 +1206,25 @@ func stdinIsTerminal() bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
+// nowFunc returns the current time; tests replace it for stable AGE output.
+var nowFunc = time.Now
+
+// taskTableOptions control the `ax get tasks` table.
+type taskTableOptions struct {
+	showLabels bool      // append a LABELS column
+	now        time.Time // reference time for AGE
+}
+
 // writeTaskTable prints tasks as the `ax get tasks` table. The AGENT column is
-// the task's "agent" label, or "-" when it has none.
-func writeTaskTable(out io.Writer, tasks []*v1alpha1.Task) error {
+// the task's "agent" label, or "-" when it has none. COST is the task's total
+// cost so far ("-" without usage).
+func writeTaskTable(out io.Writer, tasks []*v1alpha1.Task, opts taskTableOptions) error {
 	w := tabwriter.NewWriter(out, 0, 8, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tAGENT\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
+	header := "NAME\tAGENT\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE\tCOST"
+	if opts.showLabels {
+		header += "\tLABELS"
+	}
+	fmt.Fprintln(w, header)
 	for _, t := range tasks {
 		workerIP := ""
 		actor := ""
@@ -1212,10 +1253,10 @@ func writeTaskTable(out io.Writer, tasks []*v1alpha1.Task) error {
 			name = t.Metadata.Name
 			tAtespace = t.Metadata.Atespace
 			if t.Metadata.CreationTimestamp != nil {
-				age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
+				age = formatAge(opts.now.Sub(t.Metadata.CreationTimestamp.AsTime()))
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
 			name,
 			agent,
 			tAtespace,
@@ -1223,7 +1264,12 @@ func writeTaskTable(out io.Writer, tasks []*v1alpha1.Task) error {
 			actor,
 			workerIP,
 			age,
+			taskCost(t),
 		)
+		if opts.showLabels {
+			fmt.Fprintf(w, "\t%s", formatLabels(t.GetMetadata().GetLabels(), ","))
+		}
+		fmt.Fprintln(w)
 	}
 	return w.Flush()
 }

@@ -403,7 +403,8 @@ func TestParseGetArgs(t *testing.T) {
 		{args: []string{"tasks", "-l"}, wantErr: true},
 	}
 	for _, tt := range tests {
-		pos, sel, err := parseGetArgs(tt.args)
+		parsed, err := parseGetArgs(tt.args)
+		pos, sel := parsed.positional, parsed.selector
 		if (err != nil) != tt.wantErr {
 			t.Errorf("parseGetArgs(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
 			continue
