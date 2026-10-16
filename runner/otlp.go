@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -47,15 +48,22 @@ const (
 	maxOTLPBytes = 16 << 20
 
 	tokenUsageMetric = "gen_ai.client.token.usage"
+
+	// otlpReadHeaderTimeout bounds how long a client may take to send request
+	// headers to the OTLP receiver.
+	otlpReadHeaderTimeout = 10 * time.Second
 )
 
 // Span attribute names carrying GenAI token usage. Where semantic conventions
-// renamed an attribute, both spellings are accepted.
+// renamed an attribute, every spelling is accepted; the first present wins, so
+// current names take precedence over deprecated ones (for example
+// gen_ai.usage.prompt_tokens and gen_ai.usage.completion_tokens, which older
+// instrumentations still emit).
 var (
-	attrInputTokens      = []string{"gen_ai.usage.input_tokens"}
-	attrOutputTokens     = []string{"gen_ai.usage.output_tokens"}
+	attrInputTokens      = []string{"gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens"}
+	attrOutputTokens     = []string{"gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens"}
 	attrCacheReadTokens  = []string{"gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"}
-	attrCacheWriteTokens = []string{"gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens"}
+	attrCacheWriteTokens = []string{"gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens"}
 	attrReasoningTokens  = []string{"gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"}
 )
 
@@ -102,7 +110,7 @@ func startOTLPReceiver(addr string, t *usageTracker) (*otlpReceiver, error) {
 		return nil, fmt.Errorf("OTLP receiver listening on %s: %w", addr, err)
 	}
 	r := &otlpReceiver{
-		server: &http.Server{Handler: newOTLPHandler(t)},
+		server: &http.Server{Handler: newOTLPHandler(t), ReadHeaderTimeout: otlpReadHeaderTimeout},
 		addr:   lis.Addr().String(),
 	}
 	slog.Info("OTLP receiver started", "addr", r.addr)
