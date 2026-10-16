@@ -27,7 +27,9 @@ metadata:
     agent: finops-agent
     customer: acme
 spec:
-  image: "us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner:finops-latest"
+  # No spec.image: ax-server's --default-task-image (deploy/finops) is the
+  # digest-pinned FinOps runner image. Substrate v0.5.0 rejects tag refs, so an
+  # explicit image must be ...ax-task-runner@sha256:<digest>.
   command: ["python3", "/opt/finops-agent/agent.py"]
   env:
     - {name: REPORT_MODE, value: "otlp"}

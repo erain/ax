@@ -41,7 +41,10 @@ spec:
             - "--summary-interval=10m"
             # Tasks without spec.image use the FinOps runner image (the
             # built-in gcr.io default is not pullable from this cluster).
-            - "--default-task-image=us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner:finops-latest"
+            # Substrate v0.5.0 only accepts digest-pinned images; this is
+            # ax-task-runner:finops-latest (T14a build 361705f). Update it after
+            # rebuilding the runner image.
+            - "--default-task-image=us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner@sha256:020f5dc4a386ba87c46e81c4d8ea9958ecce02e7ffd656eba378572666f1e7f8"
           env:
             - name: AX_SNAPSHOTS_BUCKET
               value: "gs://ax-finops-snapshots-yiyu-gke-dev/ate-env/"
