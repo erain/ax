@@ -58,9 +58,13 @@ func main() {
 // addresses (otlp is nil when the ingestor is disabled) once both listen.
 var onListening func(api, otlp net.Addr)
 
-// shutdownTimeout bounds graceful shutdown of the listeners and the final
-// metrics export.
-const shutdownTimeout = 5 * time.Second
+// shutdownTimeout bounds the graceful shutdown of the API and OTLP listeners;
+// metricsFlushTimeout separately bounds the final metrics export, so slow
+// in-flight requests cannot eat the flush's budget.
+const (
+	shutdownTimeout     = 5 * time.Second
+	metricsFlushTimeout = 5 * time.Second
+)
 
 // zeroRateCard is the built-in rate card used without --rate-card: usage is
 // recorded but nothing is priced (tokens are flagged partially unpriced).
@@ -277,14 +281,20 @@ func run(parent context.Context, args []string) error {
 	slog.Info("shutting down ax-server")
 	cancel()
 
+	// Both listeners drain concurrently under one deadline.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
-	_ = httpServer.Shutdown(shutdownCtx)
+	var swg sync.WaitGroup
+	swg.Go(func() { _ = httpServer.Shutdown(shutdownCtx) })
 	if otlpServer != nil {
-		_ = otlpServer.Shutdown(shutdownCtx)
+		swg.Go(func() { _ = otlpServer.Shutdown(shutdownCtx) })
 	}
+	swg.Wait()
+	shutdownCancel()
 	wg.Wait()
-	if err := shutdownMetrics(shutdownCtx); err != nil {
+
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), metricsFlushTimeout)
+	defer flushCancel()
+	if err := shutdownMetrics(flushCtx); err != nil {
 		slog.Warn("flushing metrics on shutdown failed", "error", err)
 	}
 	return runErr
