@@ -38,6 +38,9 @@ models:
   gemini-2.5-flash:       { input: 0.30, output: 2.50,  cacheRead: 0.03 }
   gemini-2.5-flash-lite:  { input: 0.10, output: 0.40,  cacheRead: 0.01 }
   gemini-3-pro-preview:   { input: 2.00, output: 12.00, cacheRead: 0.20 }
+  # gemini-3-pro-preview is no longer served (404 "use gemini-3.1-pro-preview",
+  # 2026-10-16); 3.1 Pro preview is priced like 3 Pro preview (PoC assumption).
+  gemini-3.1-pro-preview: { input: 2.00, output: 12.00, cacheRead: 0.20 }
   gemini-3-flash-preview: { input: 0.50, output: 3.00,  cacheRead: 0.05 }
 idle:
   cpuThreshold: 0.02         # vCPU below which an interval counts as low activity
