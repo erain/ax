@@ -1,0 +1,47 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# AX FinOps rate card (ax-server --rate-card). Mount as a ConfigMap, e.g.
+#   kubectl -n ax-system create configmap ax-ratecard --from-file=ratecard.yaml=deploy/ratecard.yaml
+# ax-server re-reads the file when it changes (checked at most every 10s); an
+# invalid edit keeps the previous rate card and logs an error.
+#
+# Token counts follow the OTel GenAI semantic conventions: input includes
+# cache read/write tokens and output includes reasoning ("thinking") tokens.
+# Unset cacheRead/cacheWrite fall back to input; unset reasoning falls back to
+# output. A model the harness reports a provider cost for is priced at that
+# cost; a model with tokens but no entry here is flagged as partially unpriced.
+currency: USD
+compute:
+  # GKE Autopilot-style list prices (per vCPU-hour / GiB-hour). PoC values; verify for your region.
+  default: { vcpuHour: 0.0445, gibHour: 0.0049 }
+  pools: {}                  # e.g. spot: { vcpuHour: 0.0133, gibHour: 0.0015 }
+storage:
+  gibMonth: 0.020            # GiB-month = 30 days
+# USD per 1M tokens. PoC list prices; verify (Gemini API paid tier, text input,
+# prompts <= 200k tokens; long-context tiers and audio input prices are not
+# modeled). Gemini explicit context caching also bills cache storage per hour,
+# which is not modeled; cacheRead is the cached-token input price.
+models:
+  gemini-2.5-pro:         { input: 1.25, output: 10.00, cacheRead: 0.125 }
+  gemini-2.5-flash:       { input: 0.30, output: 2.50,  cacheRead: 0.03 }
+  gemini-2.5-flash-lite:  { input: 0.10, output: 0.40,  cacheRead: 0.01 }
+  gemini-3-pro-preview:   { input: 2.00, output: 12.00, cacheRead: 0.20 }
+  gemini-3-flash-preview: { input: 0.50, output: 3.00,  cacheRead: 0.05 }
+idle:
+  cpuThreshold: 0.02         # vCPU below which an interval counts as low activity
+  after: 5m                  # low activity for this long => Idle
+budgets:
+  defaultWarnAtPercent: 80
+metricLabels: [agent, customer]   # task label keys promoted to metric attributes
