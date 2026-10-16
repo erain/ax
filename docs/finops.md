@@ -176,9 +176,12 @@ reports `commandExited`. KEEP and unspecified tasks only get `Idle=True`
   task unchanged (phase `Completed`, `Completed=True`) without a reconcile.
 - **Resume:** a Completed task resumes like a Suspended one. The condition
   becomes `Completed=False` (reason `Resumed`) and keeps the completed runner
-  session. That session is never completed again. On gVisor, resume restores
-  the checkpointed process tree, so the runner keeps its session and keeps
-  reporting `commandExited`. The task then stays Running with
-  `Idle=True/CommandExited` until it is suspended or deleted. If a new runner
-  session starts (a fresh container) and its command exits, the task completes
-  again.
+  session. That session is never completed again. Agent Substrate v0.5.0
+  restores only the filesystem on resume (processes are not checkpointed), so
+  **resume re-runs the task command**: the runner starts a new session, the
+  workspace (including `/workspace/.ax/usage.json`) is kept, and when the
+  re-run command exits the task completes again. Until the first pull of the
+  new session the usage record still shows the old session's
+  `commandExited`; the session check keeps that stale flag from completing the
+  task early. To inspect a completed task without re-running its command,
+  use a command that is safe to repeat (or checks a marker in the workspace).

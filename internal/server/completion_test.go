@@ -237,9 +237,9 @@ func TestCompletion_KeepOnlyIdle(t *testing.T) {
 }
 
 // Resuming a Completed task works like resuming a Suspended one. The runner
-// session that already completed is not completed again (gVisor restores the
-// process tree, so the same session keeps reporting commandExited); a new
-// session whose command exits completes the task again.
+// session that already completed is not completed again (the usage record
+// still holds it until the first pull after the resume); the resume re-runs
+// the command in a new session, and when that exits the task completes again.
 func TestCompletion_ResumeCompleted(t *testing.T) {
 	runner := newFakeRunner(t, "s1")
 	runner.set("s1", true, 0)
