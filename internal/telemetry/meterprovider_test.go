@@ -16,6 +16,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
@@ -182,5 +184,28 @@ func TestSetupMeterProvider_ExportsOTLPHTTP(t *testing.T) {
 	}
 	if !found {
 		t.Error("ax.task.cost not exported")
+	}
+}
+
+func TestSetupMeterProvider_ErrorReturnsNoop(t *testing.T) {
+	orig := newExporter
+	t.Cleanup(func() { newExporter = orig })
+	newExporter = func(context.Context) (sdkmetric.Exporter, error) { return nil, errors.New("boom") }
+	prev := otel.GetMeterProvider()
+	t.Cleanup(func() { otel.SetMeterProvider(prev) })
+	t.Setenv(EnvEndpoint, "http://127.0.0.1:1")
+
+	mp, shutdown, err := SetupMeterProvider(context.Background())
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if _, ok := mp.(noop.MeterProvider); !ok {
+		t.Errorf("provider = %T, want noop on error", mp)
+	}
+	if shutdown == nil || shutdown(context.Background()) != nil {
+		t.Error("shutdown must be a non-nil no-op on error")
+	}
+	if otel.GetMeterProvider() != prev {
+		t.Error("global provider must be unchanged on error")
 	}
 }

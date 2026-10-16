@@ -18,7 +18,7 @@
 // Metrics (all monotonic counters, cumulative temporality when exported by
 // internal/telemetry):
 //
-//	ax.task.cost                 USD      ax.cost.kind = compute|idle|tokens|storage
+//	ax.task.cost                 {USD}    ax.cost.kind = compute|idle|tokens|storage
 //	ax.task.tokens               {token}  gen_ai.request.model, gen_ai.token.type
 //	ax.task.cpu.time             s
 //	ax.task.active.time          s
@@ -27,8 +27,21 @@
 //
 // Every series carries ax.atespace and ax.label.<key> for each configured
 // metric label key (rate card metricLabels); a task without that label, or
-// with an empty value, reports "none". There are no per-task attributes, so
-// cardinality is bounded by atespaces x label values x kinds/models.
+// with an empty value, reports "none". Label keys are sanitized to the Cloud
+// Monitoring attribute key syntax [a-zA-Z_][a-zA-Z0-9_.]* (other characters
+// become "_", e.g. "cost-center" -> ax.label.cost_center and
+// "example.com/team" -> ax.label.example.com_team; colliding keys get a
+// "_2", "_3", ... suffix in sorted order of the original keys). There are no
+// per-task attributes, so cardinality is bounded by atespaces x label values
+// x kinds/models; with WithKnownModels, models missing from the rate card are
+// grouped as gen_ai.request.model="other".
+//
+// Attribute values are made valid UTF-8 and truncated (on a rune boundary)
+// to 256 bytes: one invalid string would make the OTLP protobuf marshal, and
+// so the whole export, fail.
+//
+// The cost unit is {USD}: the PoC rate card only accepts USD (see
+// internal/cost).
 //
 // The ax.cost.kind values are disjoint so that summing ax.task.cost over all
 // kinds gives the total cost: "compute" is the non-idle compute cost
@@ -42,6 +55,9 @@ package metrics
 import (
 	"context"
 	"sort"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/google/ax/internal/usage"
 	"go.opentelemetry.io/otel/attribute"
@@ -57,7 +73,7 @@ const (
 	MetricIdleTime         = "ax.task.idle.time"
 	MetricThresholdCrossed = "ax.budget.threshold_crossed"
 
-	UnitUSD     = "USD"
+	UnitUSD     = "{USD}"
 	UnitToken   = "{token}"
 	UnitSeconds = "s"
 	UnitEvent   = "{event}"
@@ -78,6 +94,10 @@ const (
 
 	// NoneValue is the ax.label.<k> value of a task without label k.
 	NoneValue = "none"
+
+	// OtherModel is the gen_ai.request.model value of models that are not
+	// known (see WithKnownModels).
+	OtherModel = "other"
 
 	CostKindCompute = "compute"
 	CostKindIdle    = "idle"
@@ -126,8 +146,9 @@ func (f LabelLookupFunc) Labels(ctx context.Context, key usage.Key) map[string]s
 // Recorder records usage metrics. It implements usage.Hooks and is safe for
 // concurrent use.
 type Recorder struct {
-	labelKeys func() []string
-	labels    LabelLookup
+	labelKeys  func() []string
+	labels     LabelLookup
+	knownModel func(string) bool
 
 	cost      metric.Float64Counter
 	tokens    metric.Int64Counter
@@ -139,13 +160,30 @@ type Recorder struct {
 
 var _ usage.Hooks = (*Recorder)(nil)
 
+// Option configures a Recorder.
+type Option func(*Recorder)
+
+// WithKnownModels bounds the gen_ai.request.model cardinality: models for
+// which known returns false are recorded as OtherModel. The server passes a
+// rate card lookup, e.g.
+//
+//	func(m string) bool { _, ok := pricer.RateCard().ModelRates(m); return ok }
+//
+// Without this option every model name is recorded as reported.
+func WithKnownModels(known func(model string) bool) Option {
+	return func(r *Recorder) { r.knownModel = known }
+}
+
 // New creates the instruments on meter. labelKeys returns the task label keys
 // promoted to metric attributes (e.g. the current rate card's MetricLabels;
 // it is called on every record, so hot-reloaded rate cards take effect); nil
 // means none. labels resolves a task's labels; nil means every label is
 // "none".
-func New(meter metric.Meter, labelKeys func() []string, labels LabelLookup) (*Recorder, error) {
+func New(meter metric.Meter, labelKeys func() []string, labels LabelLookup, opts ...Option) (*Recorder, error) {
 	r := &Recorder{labelKeys: labelKeys, labels: labels}
+	for _, o := range opts {
+		o(r)
+	}
 	var err error
 	if r.cost, err = meter.Float64Counter(MetricCost, metric.WithUnit(UnitUSD),
 		metric.WithDescription("Priced cost of AX tasks, by cost kind (kinds are disjoint; sum = total cost).")); err != nil {
@@ -197,7 +235,7 @@ func (r *Recorder) OnDelta(ctx context.Context, key usage.Key, d usage.Delta, c 
 	sort.Strings(models)
 	for _, m := range models {
 		t := sum.Tokens[m]
-		model := attribute.String(AttrModel, attrValue(m, unknownValue))
+		model := attribute.String(AttrModel, r.modelValue(m))
 		for _, tt := range []struct {
 			typ string
 			n   int64
@@ -238,7 +276,7 @@ func (r *Recorder) commonAttributes(ctx context.Context, key usage.Key) []attrib
 		keys = r.labelKeys()
 	}
 	attrs := make([]attribute.KeyValue, 0, 1+len(keys))
-	attrs = append(attrs, attribute.String(AttrAtespace, atespace))
+	attrs = append(attrs, attribute.String(AttrAtespace, attrValue(atespace, defaultAtespace)))
 	if len(keys) == 0 {
 		return attrs
 	}
@@ -246,15 +284,87 @@ func (r *Recorder) commonAttributes(ctx context.Context, key usage.Key) []attrib
 	if r.labels != nil {
 		labels = r.labels.Labels(ctx, key)
 	}
-	seen := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		if k == "" || seen[k] {
-			continue
-		}
-		seen[k] = true
-		attrs = append(attrs, attribute.String(AttrLabelPrefix+k, attrValue(labels[k], NoneValue)))
+	for _, lk := range labelAttributeKeys(keys) {
+		attrs = append(attrs, attribute.String(lk.attr, attrValue(labels[lk.label], NoneValue)))
 	}
 	return attrs
+}
+
+// modelValue returns the gen_ai.request.model value for model.
+func (r *Recorder) modelValue(model string) string {
+	if model == "" {
+		return unknownValue
+	}
+	if r.knownModel != nil && !r.knownModel(model) {
+		return OtherModel
+	}
+	return attrValue(model, unknownValue)
+}
+
+type labelAttributeKey struct {
+	label string // task label key
+	attr  string // metric attribute key (AttrLabelPrefix + sanitized key)
+}
+
+// labelAttributeKeys maps the configured label keys to metric attribute keys.
+// Empty and duplicate keys are dropped. Keys are sanitized to
+// [a-zA-Z0-9_.] (the prefix makes the first character valid). When several
+// keys sanitize to the same attribute key, the keys are taken in sorted order:
+// the first keeps the name and later ones get "_2", "_3", ... (skipping names
+// already in use), so the mapping depends only on the set of keys.
+func labelAttributeKeys(keys []string) []labelAttributeKey {
+	uniq := make([]string, 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			uniq = append(uniq, k)
+		}
+	}
+	sort.Strings(uniq)
+	// Plain sanitized names are reserved first so a suffixed name never takes
+	// the plain name of another key.
+	taken := make(map[string]bool, len(uniq))
+	plain := make([]string, len(uniq))
+	for i, k := range uniq {
+		plain[i] = AttrLabelPrefix + sanitizeKey(k)
+	}
+	out := make([]labelAttributeKey, 0, len(uniq))
+	var collided []int
+	for i, k := range uniq {
+		if taken[plain[i]] {
+			collided = append(collided, i)
+			continue
+		}
+		taken[plain[i]] = true
+		out = append(out, labelAttributeKey{label: k, attr: plain[i]})
+	}
+	for _, i := range collided {
+		for n := 2; ; n++ {
+			name := plain[i] + "_" + strconv.Itoa(n)
+			if !taken[name] {
+				taken[name] = true
+				out = append(out, labelAttributeKey{label: uniq[i], attr: name})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// sanitizeKey replaces every character outside [A-Za-z0-9_.] with "_".
+func sanitizeKey(k string) string {
+	var b strings.Builder
+	b.Grow(len(k))
+	for _, c := range k {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '.':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 func (r *Recorder) addFloat(ctx context.Context, c metric.Float64Counter, v float64, base []attribute.KeyValue, extra ...attribute.KeyValue) {
@@ -271,13 +381,23 @@ func with(base []attribute.KeyValue, extra ...attribute.KeyValue) []attribute.Ke
 	return append(out, extra...)
 }
 
-// attrValue returns v, or def when v is empty; long values are truncated.
+// attrValue returns v, or def when v is empty. Invalid UTF-8 is replaced
+// and long values are truncated on a rune boundary, so the result is always
+// valid UTF-8 (an invalid string fails the OTLP marshal of the whole batch).
 func attrValue(v, def string) string {
 	if v == "" {
 		return def
 	}
+	v = strings.ToValidUTF8(v, "\uFFFD")
 	if len(v) > attributeValueMaxLength {
-		return v[:attributeValueMaxLength]
+		i := attributeValueMaxLength
+		for i > 0 && !utf8.RuneStart(v[i]) {
+			i--
+		}
+		v = v[:i]
+	}
+	if v == "" {
+		return def
 	}
 	return v
 }

@@ -49,6 +49,8 @@ const (
 	EnvMetricsEndpoint = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
 	EnvMetricsExporter = "OTEL_METRICS_EXPORTER"
 	EnvExportInterval  = "OTEL_METRIC_EXPORT_INTERVAL"
+	EnvProtocol        = "OTEL_EXPORTER_OTLP_PROTOCOL"
+	EnvMetricsProtocol = "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"
 )
 
 // SetupMeterProvider creates the ax-server MeterProvider and installs it as
@@ -63,18 +65,33 @@ const (
 // service.name=ax-server (OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES
 // override it). Otherwise a no-op provider is returned.
 //
-// shutdown flushes pending metrics and stops the exporter; call it on server
-// exit with a bounded context. It is never nil.
+// Export is OTLP/HTTP (protobuf) only: OTEL_EXPORTER_OTLP_PROTOCOL=grpc is
+// not supported and is ignored with a warning, so point the endpoint at an
+// OTLP/HTTP port (4318).
+//
+// The returned provider and shutdown are never nil, even with an error (then
+// they are no-ops and the global provider is left unchanged), so callers can
+// log the error and continue without metrics. shutdown flushes pending
+// metrics and stops the exporter; call it on server exit with a bounded
+// context.
 func SetupMeterProvider(ctx context.Context) (metric.MeterProvider, func(context.Context) error, error) {
 	mp, shutdown, err := newMeterProvider(ctx, os.Getenv)
 	if err != nil {
-		return nil, nil, err
+		return noop.NewMeterProvider(), noShutdown, err
 	}
 	otel.SetMeterProvider(mp)
 	return mp, shutdown, nil
 }
 
 func noShutdown(context.Context) error { return nil }
+
+// newExporter creates the OTLP/HTTP exporter (configured from the standard
+// OTEL_EXPORTER_OTLP_* env) with cumulative temporality. A variable so tests
+// can inject failures.
+var newExporter = func(ctx context.Context) (sdkmetric.Exporter, error) {
+	return otlpmetrichttp.New(ctx,
+		otlpmetrichttp.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector))
+}
 
 // newMeterProvider is SetupMeterProvider without the global side effect;
 // getenv is consulted for the enable decision and the interval.
@@ -83,14 +100,19 @@ func newMeterProvider(ctx context.Context, getenv func(string) string, extra ...
 		return noop.NewMeterProvider(), noShutdown, nil
 	}
 	interval := exportInterval(getenv)
-	exp, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector)) // cumulative
+	for _, k := range []string{EnvMetricsProtocol, EnvProtocol} {
+		if p := strings.TrimSpace(getenv(k)); p != "" && p != "http/protobuf" {
+			slog.Warn("ignoring "+k+": ax-server exports metrics over OTLP/HTTP (protobuf) only", "value", p)
+		}
+	}
+	exp, err := newExporter(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("telemetry: OTLP metric exporter: %w", err)
+		return noop.NewMeterProvider(), noShutdown, fmt.Errorf("telemetry: OTLP metric exporter: %w", err)
 	}
 	res, err := newResource(ctx)
 	if err != nil {
-		return nil, nil, err
+		_ = exp.Shutdown(ctx)
+		return noop.NewMeterProvider(), noShutdown, err
 	}
 	opts := append([]sdkmetric.Option{
 		sdkmetric.WithResource(res),

@@ -17,14 +17,18 @@ package metrics
 import (
 	"context"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/ax/internal/usage"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeLabels map[usage.Key]map[string]string
@@ -181,7 +185,7 @@ func TestRecorder_OnDeltaMetrics(t *testing.T) {
 
 	acme := "ax.atespace=default,ax.label.agent=triage,ax.label.customer=acme"
 	coder := "ax.atespace=team-b,ax.label.agent=coder,ax.label.customer=none"
-	checkPoints(t, got, MetricCost, "USD", map[string]float64{
+	checkPoints(t, got, MetricCost, "{USD}", map[string]float64{
 		enc(acme, "ax.cost.kind=compute"):  2 * 0.375,
 		enc(acme, "ax.cost.kind=idle"):     2 * 0.125,
 		enc(acme, "ax.cost.kind=tokens"):   2 * 0.25,
@@ -305,10 +309,143 @@ func TestRecorder_NegativeAndNaNIgnored(t *testing.T) {
 		// Idle slightly above compute (float noise): compute kind clamps to 0.
 		usage.Cost{Compute: 0.1, Idle: 0.1000000001, Tokens: -1}, nil)
 	got := collect(t, reader)
-	checkPoints(t, got, MetricCost, "USD", map[string]float64{"ax.atespace=a,ax.cost.kind=idle": 0.1000000001})
+	checkPoints(t, got, MetricCost, "{USD}", map[string]float64{"ax.atespace=a,ax.cost.kind=idle": 0.1000000001})
 	for _, n := range []string{MetricCPUTime, MetricActiveTime, MetricTokens} {
 		if s, ok := got[n]; ok && len(s.points) > 0 {
 			t.Errorf("%s recorded %v", n, s.points)
 		}
 	}
+}
+
+func TestAttrValue_ValidUTF8(t *testing.T) {
+	long := strings.Repeat("a", 255) + "é" + "tail" // "é" is 2 bytes and straddles byte 256
+	for _, tc := range []struct{ in, want string }{
+		{"", "def"},
+		{"gemini-2.5-flash", "gemini-2.5-flash"},
+		{long, strings.Repeat("a", 255)},
+		{strings.Repeat("€", 100), strings.Repeat("€", 85)}, // 3-byte runes: 85*3 = 255
+		{"bad\xffbyte", "bad�byte"},
+		{"\xff", "�"},
+		{strings.Repeat("b", 300), strings.Repeat("b", 256)},
+	} {
+		got := attrValue(tc.in, "def")
+		if got != tc.want {
+			t.Errorf("attrValue(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if !utf8.ValidString(got) || len(got) > attributeValueMaxLength {
+			t.Errorf("attrValue(%q) = %q: invalid UTF-8 or too long", tc.in, got)
+		}
+	}
+}
+
+// A harness-reported model name that is long multi-byte text or invalid
+// UTF-8 must not break the OTLP export of the batch.
+func TestRecorder_InvalidUTF8ModelStillExports(t *testing.T) {
+	r, reader := newTestRecorder(t, staticKeys("agent"), fakeLabels{{Atespace: "a", Name: "t"}: {"agent": "x\xfe"}})
+	bad := strings.Repeat("a", 255) + "é" + "\xff"
+	r.OnDelta(context.Background(), usage.Key{Atespace: "a", Name: "t"},
+		usage.Delta{Days: map[string]*usage.DayDelta{"2026-10-16": {Amounts: usage.Amounts{
+			Tokens: map[string]usage.TokenCounts{bad: {Input: 7}},
+		}}}}, usage.Cost{}, nil)
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				n++
+				for _, kv := range dp.Attributes.ToSlice() {
+					if v := kv.Value.AsString(); !utf8.ValidString(v) || len(v) > attributeValueMaxLength {
+						t.Errorf("attribute %s = %q: invalid", kv.Key, v)
+					}
+				}
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("got %d data points, want 1", n)
+	}
+	// And the OTLP protobuf encoding of such a point succeeds (the failure
+	// mode was "string field contains invalid UTF-8" for the whole batch).
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				for _, kv := range dp.Attributes.ToSlice() {
+					if _, err := proto.Marshal(&commonpb.KeyValue{Key: string(kv.Key),
+						Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: kv.Value.AsString()}}}); err != nil {
+						t.Errorf("marshal %s: %v", kv.Key, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Label keys allowed by the rate card (Kubernetes label key syntax) are
+// sanitized to Cloud Monitoring attribute keys [a-zA-Z_][a-zA-Z0-9_.]*,
+// with deterministic collision suffixes.
+func TestRecorder_LabelKeySanitization(t *testing.T) {
+	validKey := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.]*$`)
+	labels := fakeLabels{{Atespace: "a", Name: "t"}: {
+		"cost-center": "cc1", "cost_center": "cc2", "example.com/team": "core", "agent": "triage",
+	}}
+	for _, keys := range [][]string{
+		{"cost-center", "example.com/team", "cost_center", "agent"},
+		{"agent", "cost_center", "example.com/team", "cost-center"}, // order does not matter
+	} {
+		r, reader := newTestRecorder(t, staticKeys(keys...), labels)
+		r.OnDelta(context.Background(), usage.Key{Atespace: "a", Name: "t"},
+			usage.Delta{Days: map[string]*usage.DayDelta{"2026-10-16": {Amounts: usage.Amounts{CPUSeconds: 1}}}}, usage.Cost{}, nil)
+		got := collect(t, reader)
+		// Sorted originals: "cost-center" < "cost_center", so cost-center keeps
+		// ax.label.cost_center and cost_center becomes ax.label.cost_center_2.
+		checkPoints(t, got, MetricCPUTime, "s", map[string]float64{
+			enc("ax.atespace=a,ax.label.agent=triage,ax.label.cost_center=cc1,ax.label.cost_center_2=cc2,ax.label.example.com_team=core"): 1,
+		})
+		for attrs := range got[MetricCPUTime].points {
+			for _, kv := range strings.Split(attrs, ",") {
+				if k, _, _ := strings.Cut(kv, "="); !validKey.MatchString(k) {
+					t.Errorf("attribute key %q is not a valid Cloud Monitoring key", k)
+				}
+			}
+		}
+	}
+
+	// A suffixed name never steals another key's plain name.
+	got := labelAttributeKeys([]string{"a-b", "a_b", "a_b_2"})
+	want := map[string]string{"a-b": "ax.label.a_b", "a_b_2": "ax.label.a_b_2", "a_b": "ax.label.a_b_3"}
+	if len(got) != len(want) {
+		t.Fatalf("labelAttributeKeys = %v", got)
+	}
+	for _, lk := range got {
+		if want[lk.label] != lk.attr {
+			t.Errorf("label %q -> %q, want %q", lk.label, lk.attr, want[lk.label])
+		}
+	}
+}
+
+func TestRecorder_KnownModels(t *testing.T) {
+	known := func(m string) bool { return m == "gemini-2.5-flash" }
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	r, err := New(mp.Meter(ScopeName), nil, nil, WithKnownModels(known))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.OnDelta(context.Background(), usage.Key{Atespace: "a", Name: "t"},
+		usage.Delta{Days: map[string]*usage.DayDelta{"2026-10-16": {Amounts: usage.Amounts{
+			Tokens: map[string]usage.TokenCounts{
+				"gemini-2.5-flash": {Input: 1},
+				"my-custom-model":  {Input: 2},
+				"another-model":    {Input: 4, Output: 1},
+			},
+		}}}}, usage.Cost{}, nil)
+	checkPoints(t, collect(t, reader), MetricTokens, "{token}", map[string]float64{
+		"ax.atespace=a,gen_ai.request.model=gemini-2.5-flash,gen_ai.token.type=input": 1,
+		"ax.atespace=a,gen_ai.request.model=other,gen_ai.token.type=input":            6,
+		"ax.atespace=a,gen_ai.request.model=other,gen_ai.token.type=output":           1,
+	})
 }
