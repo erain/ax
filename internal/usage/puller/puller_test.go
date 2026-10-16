@@ -1,0 +1,636 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package puller
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/google/ax/internal/usage"
+	"github.com/google/ax/pkg/apis/v1alpha1"
+)
+
+var t0 = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+// fakeRunner is an httptest runner serving GET /usage with a settable body.
+type fakeRunner struct {
+	srv  *httptest.Server
+	ip   string
+	port int
+
+	mu      sync.Mutex
+	body    string
+	status  int
+	delay   time.Duration
+	release chan struct{}
+	hits    atomic.Int64
+	paths   []string
+}
+
+func newFakeRunner(t *testing.T) *fakeRunner {
+	t.Helper()
+	f := &fakeRunner{status: http.StatusOK, release: make(chan struct{})}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	t.Cleanup(func() { close(f.release) }) // runs before srv.Close (LIFO)
+	host, port, err := net.SplitHostPort(f.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ip = host
+	f.port, _ = strconv.Atoi(port)
+	return f
+}
+
+func (f *fakeRunner) serve(w http.ResponseWriter, r *http.Request) {
+	f.hits.Add(1)
+	f.mu.Lock()
+	body, status, delay := f.body, f.status, f.delay
+	f.paths = append(f.paths, r.Method+" "+r.URL.Path)
+	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-f.release:
+		case <-r.Context().Done():
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, body)
+}
+
+func (f *fakeRunner) set(status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status, f.body = status, body
+}
+
+func (f *fakeRunner) setDelay(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.delay = d
+}
+
+// reportJSON renders a runner GET /usage body in the T05 wire format.
+func reportJSON(t *testing.T, session string, at time.Time, tokens map[string]map[string]any) string {
+	t.Helper()
+	m := map[string]any{
+		"session":        session,
+		"reportTime":     at.Format(time.RFC3339Nano),
+		"commandExited":  false,
+		"exitCode":       0,
+		"workspaceBytes": 0,
+		"tokens":         tokens,
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+type staticLister struct {
+	mu    sync.Mutex
+	tasks []*v1alpha1.Task
+	err   error
+}
+
+func (l *staticLister) ListRunningTasks(context.Context) ([]*v1alpha1.Task, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.tasks, l.err
+}
+
+func task(name, phase, ip string) *v1alpha1.Task {
+	return &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: name, Atespace: "default"},
+		Status:   &v1alpha1.TaskStatus{Phase: phase, WorkerIp: ip},
+	}
+}
+
+// tokenPricer charges $1 per 1000 input tokens and $2 per 1000 output tokens;
+// it is linear as usage.Pricer requires. It records the pools it was asked for.
+type tokenPricer struct {
+	mu    sync.Mutex
+	pools []string
+}
+
+func (p *tokenPricer) Price(d usage.Delta, pool string) usage.Cost {
+	p.mu.Lock()
+	p.pools = append(p.pools, pool)
+	p.mu.Unlock()
+	var c usage.Cost
+	c.Currency = "USD"
+	for _, tc := range d.Sum().Tokens {
+		c.Tokens += float64(tc.Input)/1000 + 2*float64(tc.Output)/1000
+	}
+	c.Total = c.Tokens
+	return c
+}
+
+type hookCall struct {
+	key  usage.Key
+	sum  usage.DayDelta
+	cost usage.Cost
+	tot  usage.Cost
+}
+
+type recHooks struct {
+	mu    sync.Mutex
+	calls []hookCall
+}
+
+func (h *recHooks) OnDelta(_ context.Context, key usage.Key, d usage.Delta, c usage.Cost, u *usage.TaskUsage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, hookCall{key: key, sum: d.Sum(), cost: c, tot: u.Cost})
+}
+
+func (h *recHooks) snapshot() []hookCall {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]hookCall(nil), h.calls...)
+}
+
+func quietLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func newTestPuller(f *fakeRunner, lister TaskLister, store usage.Store, pricer usage.Pricer, hooks usage.Hooks) *Puller {
+	return New(Options{
+		Tasks:   lister,
+		Store:   store,
+		Pricer:  pricer,
+		Hooks:   hooks,
+		Port:    f.port,
+		Timeout: 2 * time.Second,
+		Now:     func() time.Time { return t0 },
+		Logger:  quietLogger(),
+	})
+}
+
+func approx(a, b float64) bool {
+	d := a - b
+	return d < 1e-9 && d > -1e-9
+}
+
+func TestSweep_CumulativeReportsCountedOncePerIncrement(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	store := usage.NewMemoryStore()
+	pricer := &tokenPricer{}
+	hooks := &recHooks{}
+	lister := &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}}
+	key := usage.Key{Atespace: "default", Name: "t1"}
+
+	// The ingestor already recorded the pool; pricing must use it.
+	if err := store.Update(ctx, key, func(u *usage.TaskUsage) error {
+		u.State.Pool = "pool-a"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newTestPuller(f, lister, store, pricer, hooks)
+
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{
+		"gemini-2.5-flash": {"input": 1000, "output": 500, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0},
+	}))
+	p.Sweep(ctx)
+
+	f.set(http.StatusOK, reportJSON(t, "s1", t0.Add(time.Minute), map[string]map[string]any{
+		"gemini-2.5-flash": {"input": 3000, "output": 1000, "cacheRead": 200, "cacheWrite": 0, "reasoning": 100},
+	}))
+	p.Sweep(ctx)
+
+	// A repeated identical report changes nothing.
+	p.Sweep(ctx)
+
+	u, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := usage.TokenCounts{Input: 3000, Output: 1000, CacheRead: 200, Reasoning: 100}
+	if got := u.Tokens["gemini-2.5-flash"]; got != want {
+		t.Errorf("lifetime tokens = %+v, want %+v", got, want)
+	}
+	// cost: (1000/1000 + 2*500/1000) + (2000/1000 + 2*500/1000) = 2 + 3 = 5
+	if !approx(u.Cost.Total, 5) || !approx(u.Cost.Tokens, 5) {
+		t.Errorf("lifetime cost = %+v, want total/tokens 5", u.Cost)
+	}
+	if day := u.Days[usage.DateOf(t0)]; day == nil || !approx(day.Cost.Total, 5) {
+		t.Errorf("day cost = %+v, want 5", day)
+	}
+
+	calls := hooks.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("hook calls = %d, want 2: %+v", len(calls), calls)
+	}
+	if got := calls[0].sum.Tokens["gemini-2.5-flash"]; got != (usage.TokenCounts{Input: 1000, Output: 500}) {
+		t.Errorf("first delta = %+v", got)
+	}
+	if got := calls[1].sum.Tokens["gemini-2.5-flash"]; got != (usage.TokenCounts{Input: 2000, Output: 500, CacheRead: 200, Reasoning: 100}) {
+		t.Errorf("second delta = %+v", got)
+	}
+	if !approx(calls[0].cost.Total, 2) || !approx(calls[1].cost.Total, 3) {
+		t.Errorf("hook costs = %v, %v; want 2, 3", calls[0].cost.Total, calls[1].cost.Total)
+	}
+	if !approx(calls[1].tot.Total, 5) {
+		t.Errorf("hook usage total = %v, want 5 (cost added before hook)", calls[1].tot.Total)
+	}
+	if calls[0].key != key {
+		t.Errorf("hook key = %+v, want %+v", calls[0].key, key)
+	}
+
+	pricer.mu.Lock()
+	for _, pool := range pricer.pools {
+		if pool != "pool-a" {
+			t.Errorf("Price called with pool %q, want pool-a", pool)
+		}
+	}
+	pricer.mu.Unlock()
+
+	st := p.Stats()
+	if st.Sweeps != 3 || st.Pulls != 3 || st.Failures != 0 || st.Applied != 2 {
+		t.Errorf("stats = %+v, want 3 sweeps, 3 pulls, 0 failures, 2 applied", st)
+	}
+	f.mu.Lock()
+	for _, path := range f.paths {
+		if path != "GET /usage" {
+			t.Errorf("runner request %q, want GET /usage", path)
+		}
+	}
+	f.mu.Unlock()
+}
+
+func TestSweep_RunnerRestartNewSessionNotDoubleCounted(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	store := usage.NewMemoryStore()
+	lister := &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}}
+	p := newTestPuller(f, lister, store, &tokenPricer{}, nil)
+
+	tok := map[string]map[string]any{"m": {"input": 100, "output": 10}}
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, tok))
+	p.Sweep(ctx)
+	// Runner restarted: new session, same persisted counters, then growth.
+	f.set(http.StatusOK, reportJSON(t, "s2", t0.Add(time.Minute), tok))
+	p.Sweep(ctx)
+	f.set(http.StatusOK, reportJSON(t, "s2", t0.Add(2*time.Minute), map[string]map[string]any{"m": {"input": 150, "output": 20}}))
+	p.Sweep(ctx)
+
+	u, err := store.Get(ctx, usage.Key{Atespace: "default", Name: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := u.Tokens["m"], (usage.TokenCounts{Input: 150, Output: 20}); got != want {
+		t.Errorf("tokens = %+v, want %+v", got, want)
+	}
+}
+
+func TestSweep_NeverContactsNonRunningTasks(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	store := usage.NewMemoryStore()
+	lister := &staticLister{tasks: []*v1alpha1.Task{
+		task("running-no-ip", PhaseRunning, ""),
+		task("suspended", "Suspended", f.ip),
+		task("pending", "Pending", f.ip),
+		task("completed", "Completed", f.ip),
+		task("no-phase", "", f.ip),
+		{Metadata: &v1alpha1.ObjectMeta{Name: "no-status"}},
+		nil,
+	}}
+	p := newTestPuller(f, lister, store, nil, nil)
+
+	p.Sweep(ctx)
+	p.Sweep(ctx)
+	for _, tk := range lister.tasks {
+		if err := p.Flush(ctx, tk); err != nil {
+			t.Errorf("Flush(%s) = %v, want nil", tk.GetMetadata().GetName(), err)
+		}
+	}
+	if n := f.hits.Load(); n != 0 {
+		t.Fatalf("runner contacted %d times, want 0", n)
+	}
+	all, err := store.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Errorf("store has %d records, want 0", len(all))
+	}
+
+	// Adding one Running task with an IP: exactly one hit per sweep.
+	lister.mu.Lock()
+	lister.tasks = append(lister.tasks, task("running", PhaseRunning, f.ip))
+	lister.mu.Unlock()
+	p.Sweep(ctx)
+	p.Sweep(ctx)
+	if n := f.hits.Load(); n != 2 {
+		t.Errorf("runner contacted %d times, want 2", n)
+	}
+}
+
+func TestPull_FailuresDoNotChangeData(t *testing.T) {
+	good := map[string]map[string]any{"m": {"input": 100, "output": 10}}
+	tests := []struct {
+		name   string
+		status int
+		body   func(t *testing.T) string
+		delay  time.Duration
+	}{
+		{name: "500", status: http.StatusInternalServerError, body: func(*testing.T) string { return "boom" }},
+		{name: "404", status: http.StatusNotFound, body: func(*testing.T) string { return "" }},
+		{name: "garbage json", status: http.StatusOK, body: func(*testing.T) string { return "{not json" }},
+		{name: "html", status: http.StatusOK, body: func(*testing.T) string { return "<html></html>" }},
+		{name: "wrong types", status: http.StatusOK, body: func(*testing.T) string {
+			return `{"session":"s1","reportTime":"2026-10-16T12:05:00Z","tokens":{"m":{"input":"lots"}}}`
+		}},
+		{name: "tokens not an object", status: http.StatusOK, body: func(*testing.T) string {
+			return `{"session":"s1","reportTime":"2026-10-16T12:05:00Z","tokens":[1,2]}`
+		}},
+		{name: "negative counter", status: http.StatusOK, body: func(t *testing.T) string {
+			return reportJSON(t, "s1", t0.Add(5*time.Minute), map[string]map[string]any{"m": {"input": -5}})
+		}},
+		{name: "oversized body", status: http.StatusOK, body: func(*testing.T) string {
+			return `{"session":"` + strings.Repeat("x", maxReportBytes) + `"}`
+		}},
+		{name: "timeout", status: http.StatusOK, delay: time.Minute, body: func(t *testing.T) string {
+			return reportJSON(t, "s1", t0.Add(5*time.Minute), map[string]map[string]any{"m": {"input": 999}})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFakeRunner(t)
+			store := usage.NewMemoryStore()
+			hooks := &recHooks{}
+			lister := &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}}
+			p := New(Options{
+				Tasks: lister, Store: store, Pricer: &tokenPricer{}, Hooks: hooks,
+				Port: f.port, Timeout: 200 * time.Millisecond,
+				Now: func() time.Time { return t0 }, Logger: quietLogger(),
+			})
+			key := usage.Key{Atespace: "default", Name: "t1"}
+
+			f.set(http.StatusOK, reportJSON(t, "s1", t0, good))
+			p.Sweep(ctx)
+			before, err := store.Get(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeJSON, _ := json.Marshal(before)
+
+			f.set(tc.status, tc.body(t))
+			f.setDelay(tc.delay)
+			start := time.Now()
+			p.Sweep(ctx)
+			if el := time.Since(start); el > 2*time.Second {
+				t.Errorf("sweep took %v, want bounded by timeout", el)
+			}
+
+			after, err := store.Get(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterJSON, _ := json.Marshal(after)
+			if string(beforeJSON) != string(afterJSON) {
+				t.Errorf("usage changed after failed pull:\nbefore %s\nafter  %s", beforeJSON, afterJSON)
+			}
+			if n := len(hooks.snapshot()); n != 1 {
+				t.Errorf("hook calls = %d, want 1 (only the good pull)", n)
+			}
+			if st := p.Stats(); st.Failures != 1 || st.Pulls != 2 {
+				t.Errorf("stats = %+v, want 1 failure of 2 pulls", st)
+			}
+		})
+	}
+}
+
+func TestPull_ConnectionRefused(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	store := usage.NewMemoryStore()
+	p := New(Options{Store: store, Port: port, Timeout: time.Second, Logger: quietLogger()})
+	if err := p.Flush(context.Background(), task("t1", PhaseRunning, "127.0.0.1")); err == nil {
+		t.Fatal("Flush to closed port = nil, want error")
+	}
+	if all, _ := store.List(context.Background(), ""); len(all) != 0 {
+		t.Errorf("store has %d records, want 0", len(all))
+	}
+}
+
+func TestFlush(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRunner(t)
+	store := usage.NewMemoryStore()
+	hooks := &recHooks{}
+	p := newTestPuller(f, nil, store, &tokenPricer{}, hooks)
+	tk := task("t1", PhaseRunning, f.ip)
+
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 2000, "output": 0}}))
+	if err := p.Flush(ctx, tk); err != nil {
+		t.Fatalf("Flush = %v", err)
+	}
+	u, err := store.Get(ctx, usage.Key{Atespace: "default", Name: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Tokens["m"].Input; got != 2000 {
+		t.Errorf("input tokens = %d, want 2000", got)
+	}
+	if !approx(u.Cost.Total, 2) {
+		t.Errorf("cost = %v, want 2", u.Cost.Total)
+	}
+	if n := len(hooks.snapshot()); n != 1 {
+		t.Errorf("hook calls = %d, want 1", n)
+	}
+	// Sweep with a nil lister is a no-op.
+	p.Sweep(ctx)
+	if n := f.hits.Load(); n != 1 {
+		t.Errorf("hits = %d, want 1", n)
+	}
+}
+
+func TestFlush_RespectsTimeout(t *testing.T) {
+	f := newFakeRunner(t)
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	f.setDelay(time.Minute)
+	store := usage.NewMemoryStore()
+	p := New(Options{Store: store, Port: f.port, Timeout: 150 * time.Millisecond, Logger: quietLogger()})
+
+	start := time.Now()
+	err := p.Flush(context.Background(), task("t1", PhaseRunning, f.ip))
+	el := time.Since(start)
+	if err == nil {
+		t.Fatal("Flush = nil, want timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") && !strings.Contains(err.Error(), "Timeout") {
+		t.Errorf("Flush error = %v, want a deadline error", err)
+	}
+	if el > time.Second {
+		t.Errorf("Flush took %v, want ~150ms", el)
+	}
+	if _, err := store.Get(context.Background(), usage.Key{Atespace: "default", Name: "t1"}); !errors.Is(err, usage.ErrNotFound) {
+		t.Errorf("store Get = %v, want ErrNotFound", err)
+	}
+
+	// A caller deadline shorter than Timeout also bounds Flush.
+	p2 := New(Options{Store: store, Port: f.port, Timeout: time.Minute, Logger: quietLogger()})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start = time.Now()
+	if err := p2.Flush(ctx, task("t1", PhaseRunning, f.ip)); err == nil {
+		t.Error("Flush with expired caller ctx = nil, want error")
+	}
+	if el := time.Since(start); el > time.Second {
+		t.Errorf("Flush took %v with a 100ms caller deadline", el)
+	}
+}
+
+func TestSweep_BoundedConcurrency(t *testing.T) {
+	var inflight, maxInflight atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := inflight.Add(1)
+		for {
+			m := maxInflight.Load()
+			if n <= m || maxInflight.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		inflight.Add(-1)
+		fmt.Fprintf(w, `{"session":"s","reportTime":%q,"tokens":{"m":{"input":1}}}`, t0.Format(time.RFC3339))
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().(*net.TCPAddr)
+
+	var tasks []*v1alpha1.Task
+	for i := range 20 {
+		tasks = append(tasks, task(fmt.Sprintf("t%d", i), PhaseRunning, addr.IP.String()))
+	}
+	store := usage.NewMemoryStore()
+	p := New(Options{
+		Tasks: &staticLister{tasks: tasks}, Store: store, Port: addr.Port,
+		Concurrency: 3, Logger: quietLogger(),
+	})
+	p.Sweep(context.Background())
+	if m := maxInflight.Load(); m > 3 || m < 1 {
+		t.Errorf("max in-flight pulls = %d, want 1..3", m)
+	}
+	all, err := store.List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 20 {
+		t.Errorf("records = %d, want 20", len(all))
+	}
+	if st := p.Stats(); st.Pulls != 20 || st.Failures != 0 || st.Applied != 20 {
+		t.Errorf("stats = %+v", st)
+	}
+}
+
+func TestSweep_ListerErrorIsNotFatal(t *testing.T) {
+	p := New(Options{Tasks: &staticLister{err: errors.New("redis down")}, Store: usage.NewMemoryStore(), Logger: quietLogger()})
+	p.Sweep(context.Background())
+	if st := p.Stats(); st.Pulls != 0 {
+		t.Errorf("stats = %+v, want no pulls", st)
+	}
+}
+
+func TestRun_SweepsPeriodicallyUntilCanceled(t *testing.T) {
+	f := newFakeRunner(t)
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	p := New(Options{
+		Tasks:    &staticLister{tasks: []*v1alpha1.Task{task("t1", PhaseRunning, f.ip)}},
+		Store:    usage.NewMemoryStore(),
+		Port:     f.port,
+		Interval: 10 * time.Millisecond,
+		Logger:   quietLogger(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for f.hits.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+	if n := f.hits.Load(); n < 3 {
+		t.Errorf("hits = %d, want >= 3", n)
+	}
+}
+
+func TestDecodeReport(t *testing.T) {
+	// Exact T05 wire format, including a model with provider cost.
+	body := `{"session":"abc","reportTime":"2026-10-16T12:00:00.123456789Z","commandExited":true,"exitCode":3,` +
+		`"workspaceBytes":4096,"tokens":{"gemini-2.5-pro":{"input":10,"output":20,"cacheRead":3,"cacheWrite":4,` +
+		`"reasoning":5,"costAmount":0.25,"costCurrency":"USD"},"gemini-2.5-flash":{"input":1,"output":2,` +
+		`"cacheRead":0,"cacheWrite":0,"reasoning":0}}}`
+	got, err := decodeReport([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Session != "abc" || !got.CommandExited || got.ExitCode != 3 || got.WorkspaceBytes != 4096 {
+		t.Errorf("report = %+v", got)
+	}
+	if want := time.Date(2026, 10, 16, 12, 0, 0, 123456789, time.UTC); !got.ReportTime.Equal(want) {
+		t.Errorf("reportTime = %v, want %v", got.ReportTime, want)
+	}
+	if want := (usage.RunnerTokens{Input: 10, Output: 20, CacheRead: 3, CacheWrite: 4, Reasoning: 5, CostAmount: 0.25, CostCurrency: "USD"}); got.Tokens["gemini-2.5-pro"] != want {
+		t.Errorf("pro = %+v, want %+v", got.Tokens["gemini-2.5-pro"], want)
+	}
+	if want := (usage.RunnerTokens{Input: 1, Output: 2}); got.Tokens["gemini-2.5-flash"] != want {
+		t.Errorf("flash = %+v, want %+v", got.Tokens["gemini-2.5-flash"], want)
+	}
+
+	empty, err := decodeReport([]byte(`{"session":"s","reportTime":"2026-10-16T12:00:00Z","tokens":{}}`))
+	if err != nil || empty.Tokens != nil {
+		t.Errorf("empty tokens: %+v, %v", empty, err)
+	}
+	if _, err := decodeReport([]byte(`{"workspaceBytes":-1}`)); !errors.Is(err, errBadReport) {
+		t.Errorf("negative workspaceBytes err = %v", err)
+	}
+}
