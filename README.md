@@ -115,7 +115,8 @@ Want to see the whole lifecycle end to end? Run [`./demo.sh`](demo.sh). It appli
 | [Sandbox](docs/sandbox.md) | See what the runner does on boot and what your command can rely on: metadata server, guest services, environment. |
 | [Runners](docs/runner.md) | Understand the contract between the control plane and the task container, and build your own runner image to replace the default. |
 | [Networking](docs/networking.md) | Reach a running task through the atenet router from the cluster, your laptop, or a gRPC client. |
-| [CLI: usage and cost](docs/cli.md) | Read task usage and cost with `ax get tasks`, `ax describe task`, and `ax cost summary`. |
+| [CLI: usage and cost](docs/cli.md) | Read task usage and cost with `ax get tasks`, `ax describe task`, `ax cost summary`, and `ax cost export`. |
+| [FOCUS export](docs/finops-focus.md) | How `ax cost export` maps task usage to FOCUS columns. |
 | [Architecture](DESIGN.md) | Understand how the control plane fits together, plus the [API reference](DESIGN.md#api-reference). |
 | [Development](docs/development.md) | Build, test, and ship changes to AX itself. |
 | [Roadmap](docs/roadmap.md) | See planned milestones across core specs, actor architecture, agentic environments, and governance. |
@@ -145,6 +146,8 @@ ax delete task task123
 # Usage and cost (see docs/cli.md)
 ax cost summary                       # roll up by the "agent" label
 ax cost summary --by customer -l agent=coder -o json
+ax cost summary --start 2026-10-01 --end 2026-10-31
+ax cost export --format focus-csv -o costs.csv   # FOCUS rows per task, day and charge
 
 # Shell into the running sandbox
 ax ssh task123                        # interactive shell (task needs spec.debug: true)

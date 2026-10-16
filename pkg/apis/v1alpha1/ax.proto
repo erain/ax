@@ -359,7 +359,8 @@ message ListUsageRequest {
   // label_selector has the same syntax as ListTasksRequest.label_selector.
   string label_selector = 2;
   // start_date and end_date bound the UTC days returned, as YYYY-MM-DD,
-  // inclusive. Empty means unbounded.
+  // inclusive. An empty end_date means today (UTC); an empty start_date
+  // means 29 days before end_date, so the default is the last 30 days.
   string start_date = 3;
   string end_date = 4;
 }
@@ -383,6 +384,42 @@ message DailyUsage {
   double storage_gib_seconds = 10;
   repeated ModelTokenUsage tokens = 11;
   CostBreakdown cost = 12;
+  // charges split cost into priced components (compute as vCPU and memory,
+  // tokens per model and token type, storage). Their costs sum to
+  // cost.total.
+  repeated UsageCharge charges = 13;
+}
+
+// UsageCharge is one priced component of a DailyUsage, e.g. one FOCUS row.
+message UsageCharge {
+  // kind is "cpu", "memory", "tokens" or "storage".
+  string kind = 1;
+  // model is set for tokens.
+  string model = 2;
+  // token_type is set for tokens: "input" (uncached input), "cache_read",
+  // "cache_write", "output" (excluding reasoning) or "reasoning". Following
+  // the OTel GenAI conventions, ModelTokenUsage.input includes cache reads
+  // and writes and output includes reasoning; the charge quantities do not
+  // overlap.
+  string token_type = 3;
+  // quantity is the amount consumed, in unit ("vCPU-Hours", "GiB-Hours",
+  // "Tokens" or "GiB-Months").
+  double quantity = 4;
+  string unit = 5;
+  // pricing_quantity is quantity in pricing_unit ("1M Tokens" for tokens,
+  // otherwise the same as unit).
+  double pricing_quantity = 6;
+  string pricing_unit = 7;
+  // list_unit_price is the current rate card price per pricing_unit. It is
+  // unset when the rate card has no price (no rate card, unknown model).
+  optional double list_unit_price = 8;
+  // cost is this component's share of the frozen day cost: cost.compute,
+  // cost.tokens and cost.storage are split over their components in
+  // proportion to their current list-price cost, which is exact unless the
+  // rate card changed or a provider-reported cost was used.
+  double cost = 9;
+  // idle_cost is the part of cost consumed while idle (cpu and memory).
+  double idle_cost = 10;
 }
 
 // Workspaces

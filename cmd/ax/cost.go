@@ -20,40 +20,75 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/google/ax/pkg/apis/v1alpha1"
 )
 
 const costUsage = `Usage:
-  ax cost summary [--by <label>] [-l k=v,...] [-a <atespace>] [-o table|json]
+  ax cost summary [--by <label>] [-l k=v,...] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [-o table|json]
+  ax cost export [--format focus-csv|json] [-l k=v,...] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [-o <file>]
 
-Roll up task usage and cost by the value of a task label.
+summary rolls up task usage and cost by the value of a task label. export
+writes FOCUS (FinOps Open Cost and Usage Specification) rows: one per task,
+UTC day and charge (vCPU, memory, tokens per model and token type, storage).
+
+Both read per-day usage (ListUsage) for the UTC days --start..--end
+(inclusive; default: the 30 days ending today). Against a server without
+ListUsage, summary falls back to lifetime totals from ListTasks.
 
 Flags:
-  --by string            Task label to group by (default "agent"); tasks without it are grouped as <none>
+  --by string            summary: task label to group by (default "agent"); tasks without it are grouped as <none>
   -l, --selector string  Only include tasks matching this label selector (k=v,...)
-  -a, --atespace string  Atespace scope (default "default")
-  -o, --output string    Output format: table or json (default "table")`
+  --start string         First UTC day, YYYY-MM-DD (default: 29 days before --end)
+  --end string           Last UTC day, YYYY-MM-DD (default: today)
+  -o, --output string    summary: output format, table or json (default "table");
+                         export: output file (default: stdout)
+  --format string        export: focus-csv or json (default "focus-csv")
+  -a, --atespace string  Atespace scope (global flag; default "default")`
 
 // noLabelGroup is the group of tasks that do not carry the --by label.
 const noLabelGroup = "<none>"
+
+// defaultUsageDays is the default date range of ListUsage (keep in sync with
+// server.DefaultUsageDays).
+const defaultUsageDays = 30
 
 // costSummaryOptions are the parsed flags of `ax cost summary`.
 type costSummaryOptions struct {
 	by       string
 	selector string
 	output   string
+	start    string
+	end      string
 }
 
-// parseCostSummaryArgs parses the flags of `ax cost summary` (the arguments
-// after "summary").
-func parseCostSummaryArgs(args []string) (costSummaryOptions, error) {
-	opts := costSummaryOptions{by: labelAgent, output: "table"}
+// costExportOptions are the parsed flags of `ax cost export`.
+type costExportOptions struct {
+	format   string
+	selector string
+	start    string
+	end      string
+	file     string
+}
+
+// costCommand is a parsed `ax cost` invocation.
+type costCommand struct {
+	sub     string // "summary" or "export"
+	summary costSummaryOptions
+	export  costExportOptions
+}
+
+// parseCostFlags parses `--name value` / `--name=value` flags into flags.
+func parseCostFlags(sub string, args []string, flags map[string]*string) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		name, value, hasValue := arg, "", false
@@ -62,25 +97,60 @@ func parseCostSummaryArgs(args []string) (costSummaryOptions, error) {
 				name, value, hasValue = k, v, true
 			}
 		}
-		var dst *string
-		switch name {
-		case "--by":
-			dst = &opts.by
-		case "-l", "--selector":
-			dst = &opts.selector
-		case "-o", "--output":
-			dst = &opts.output
-		default:
-			return opts, fmt.Errorf("unexpected argument %q for 'ax cost summary'", arg)
+		dst, ok := flags[name]
+		if !ok {
+			return fmt.Errorf("unexpected argument %q for 'ax cost %s'", arg, sub)
 		}
 		if !hasValue {
 			if i+1 >= len(args) {
-				return opts, fmt.Errorf("flag %s requires a value", name)
+				return fmt.Errorf("flag %s requires a value", name)
 			}
 			value = args[i+1]
 			i++
 		}
 		*dst = value
+	}
+	return nil
+}
+
+// validateDateFlags checks --start/--end (YYYY-MM-DD, start <= end).
+func validateDateFlags(start, end string) error {
+	for _, f := range []struct{ name, v string }{{"--start", start}, {"--end", end}} {
+		if f.v == "" {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, f.v); err != nil {
+			return fmt.Errorf("invalid %s %q: want YYYY-MM-DD", f.name, f.v)
+		}
+	}
+	if start != "" && end != "" && start > end {
+		return fmt.Errorf("--start %s is after --end %s", start, end)
+	}
+	return nil
+}
+
+// resolveDateRange applies the ListUsage defaults to validated --start/--end:
+// an empty end is today (UTC), an empty start is 29 days before end.
+func resolveDateRange(start, end string, now time.Time) (string, string) {
+	if end == "" {
+		end = now.UTC().Format(time.DateOnly)
+	}
+	if start == "" {
+		e, _ := time.Parse(time.DateOnly, end)
+		start = e.AddDate(0, 0, -(defaultUsageDays - 1)).Format(time.DateOnly)
+	}
+	return start, end
+}
+
+// parseCostSummaryArgs parses the flags of `ax cost summary` (the arguments
+// after "summary").
+func parseCostSummaryArgs(args []string) (costSummaryOptions, error) {
+	opts := costSummaryOptions{by: labelAgent, output: "table"}
+	if err := parseCostFlags("summary", args, map[string]*string{
+		"--by": &opts.by, "-l": &opts.selector, "--selector": &opts.selector,
+		"-o": &opts.output, "--output": &opts.output, "--start": &opts.start, "--end": &opts.end,
+	}); err != nil {
+		return opts, err
 	}
 	if err := v1alpha1.ValidateLabelKey(opts.by); err != nil {
 		return opts, fmt.Errorf("invalid --by label %q: %v", opts.by, err)
@@ -91,36 +161,60 @@ func parseCostSummaryArgs(args []string) (costSummaryOptions, error) {
 	if opts.output != "table" && opts.output != "json" {
 		return opts, fmt.Errorf("unsupported output format %q (want table or json)", opts.output)
 	}
-	return opts, nil
+	return opts, validateDateFlags(opts.start, opts.end)
+}
+
+// parseCostExportArgs parses the flags of `ax cost export` (the arguments
+// after "export").
+func parseCostExportArgs(args []string) (costExportOptions, error) {
+	opts := costExportOptions{format: formatFocusCSV}
+	if err := parseCostFlags("export", args, map[string]*string{
+		"--format": &opts.format, "-l": &opts.selector, "--selector": &opts.selector,
+		"-o": &opts.file, "--output": &opts.file, "--start": &opts.start, "--end": &opts.end,
+	}); err != nil {
+		return opts, err
+	}
+	if _, err := v1alpha1.ParseLabelSelector(opts.selector); err != nil {
+		return opts, err
+	}
+	if opts.format != formatFocusCSV && opts.format != formatJSON {
+		return opts, fmt.Errorf("unsupported export format %q (want %s or %s)", opts.format, formatFocusCSV, formatJSON)
+	}
+	return opts, validateDateFlags(opts.start, opts.end)
 }
 
 // parseCostArgs parses `ax cost <subcommand> [flags]`. It writes the usage
 // text and returns done=true for help requests; main calls it before resolving
 // the server so help and usage errors never contact a cluster.
-func parseCostArgs(args []string, out io.Writer) (opts costSummaryOptions, done bool, err error) {
+func parseCostArgs(args []string, out io.Writer) (cmd costCommand, done bool, err error) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprintln(out, costUsage)
 		if len(args) == 0 {
-			return opts, true, fmt.Errorf("specify a subcommand (e.g. 'ax cost summary')")
+			return cmd, true, fmt.Errorf("specify a subcommand (e.g. 'ax cost summary')")
 		}
-		return opts, true, nil
+		return cmd, true, nil
 	}
-	if args[0] != "summary" {
-		return opts, true, fmt.Errorf("unknown cost subcommand %q (want summary)", args[0])
+	cmd.sub = args[0]
+	if cmd.sub != "summary" && cmd.sub != "export" {
+		return cmd, true, fmt.Errorf("unknown cost subcommand %q (want summary or export)", args[0])
 	}
 	for _, a := range args[1:] {
 		if a == "-h" || a == "--help" {
 			fmt.Fprintln(out, costUsage)
-			return opts, true, nil
+			return cmd, true, nil
 		}
 	}
-	opts, err = parseCostSummaryArgs(args[1:])
-	return opts, err != nil, err
+	if cmd.sub == "export" {
+		cmd.export, err = parseCostExportArgs(args[1:])
+	} else {
+		cmd.summary, err = parseCostSummaryArgs(args[1:])
+	}
+	return cmd, err != nil, err
 }
 
 // runCost implements `ax cost <subcommand>`.
 func runCost(serverURL, atespace string, args []string, out io.Writer) error {
-	opts, done, err := parseCostArgs(args, out)
+	cmd, done, err := parseCostArgs(args, out)
 	if done || err != nil {
 		return err
 	}
@@ -133,8 +227,26 @@ func runCost(serverURL, atespace string, args []string, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	src := taskUsageSource{client: client}
+	if cmd.sub == "export" {
+		return runCostExport(ctx, client, atespace, cmd.export, out)
+	}
+	return runCostSummary(ctx, client, atespace, cmd.summary, out)
+}
+
+// runCostSummary implements `ax cost summary`: per-day usage from ListUsage,
+// or lifetime totals from ListTasks when the server has no ListUsage.
+func runCostSummary(ctx context.Context, client v1alpha1.AXClient, atespace string, opts costSummaryOptions, out io.Writer) error {
+	start, end := resolveDateRange(opts.start, opts.end, nowFunc())
+	var src usageSource = listUsageSource{client: client, start: start, end: end}
 	rows, err := src.rows(ctx, atespace, opts.selector)
+	if listUsageUnavailable(err) {
+		if opts.start != "" || opts.end != "" {
+			fmt.Fprintf(os.Stderr, "Warning: the server does not serve per-day usage (%s); showing lifetime totals, --start/--end ignored\n",
+				status.Convert(err).Message())
+		}
+		src = taskUsageSource{client: client}
+		rows, err = src.rows(ctx, atespace, opts.selector)
+	}
 	if err != nil {
 		return err
 	}
@@ -142,16 +254,28 @@ func runCost(serverURL, atespace string, args []string, out io.Writer) error {
 	s.Atespace = atespace
 	s.Selector = opts.selector
 	s.Source = src.name()
+	if ls, ok := src.(listUsageSource); ok {
+		s.Start, s.End = ls.start, ls.end
+	}
 	if opts.output == "json" {
 		return writeCostSummaryJSON(out, s)
 	}
 	return writeCostSummaryTable(out, s)
 }
 
-// usageRow is one unit of usage attributed to a task. With the ListTasks
-// source it holds a task's lifetime totals; a ListUsage source (T16) yields
-// one row per task and UTC day, which summarize handles the same way (tasks
-// are counted once per group).
+// listUsageUnavailable reports whether a ListUsage error means the server
+// cannot serve per-day usage (an older server, or usage accounting off).
+func listUsageUnavailable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unimplemented, codes.FailedPrecondition:
+		return true
+	}
+	return false
+}
+
+// usageRow is one unit of usage attributed to a task: a task's lifetime
+// totals (taskUsageSource) or one task and UTC day (listUsageSource), which
+// summarize handles the same way (tasks are counted once per group).
 type usageRow struct {
 	Atespace      string
 	Task          string
@@ -214,6 +338,51 @@ func taskUsageRow(t *v1alpha1.Task) usageRow {
 	}
 }
 
+var _ usageSource = listUsageSource{}
+
+// listUsageSource reads per-task, per-day usage via ListUsage for the UTC
+// days start..end (inclusive).
+type listUsageSource struct {
+	client     v1alpha1.AXClient
+	start, end string
+}
+
+func (listUsageSource) name() string { return "usage" }
+
+func (s listUsageSource) rows(ctx context.Context, atespace, selector string) ([]usageRow, error) {
+	days, err := s.days(ctx, atespace, selector)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]usageRow, 0, len(days))
+	for _, d := range days {
+		rows = append(rows, usageRow{
+			Atespace:      d.GetAtespace(),
+			Task:          d.GetTask(),
+			Labels:        d.GetLabels(),
+			ActiveSeconds: d.GetActiveSeconds(),
+			IdleSeconds:   d.GetIdleSeconds(),
+			Tokens:        totalTokens(d.GetTokens()),
+			Cost:          d.GetCost(),
+		})
+	}
+	return rows, nil
+}
+
+// days calls ListUsage. Errors keep their gRPC status (listUsageUnavailable).
+func (s listUsageSource) days(ctx context.Context, atespace, selector string) ([]*v1alpha1.DailyUsage, error) {
+	resp, err := s.client.ListUsage(ctx, &v1alpha1.ListUsageRequest{
+		Atespace: atespace, LabelSelector: selector, StartDate: s.start, EndDate: s.end,
+	})
+	if err != nil {
+		if listUsageUnavailable(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("listing usage: %w", err)
+	}
+	return resp.GetDays(), nil
+}
+
 // costTotals are summed costs; field meanings follow CostBreakdown (idle is a
 // subset of compute; total = compute + tokens + storage).
 type costTotals struct {
@@ -262,6 +431,8 @@ type costSummary struct {
 	Atespace string       `json:"atespace"`
 	Selector string       `json:"selector,omitempty"`
 	Source   string       `json:"source"`
+	Start    string       `json:"start,omitempty"`
+	End      string       `json:"end,omitempty"`
 	Currency string       `json:"currency"`
 	Groups   []*costGroup `json:"groups"`
 	Total    *costGroup   `json:"total"`
@@ -333,6 +504,9 @@ func writeCostSummaryTable(out io.Writer, s costSummary) error {
 	}
 	if unpriced {
 		fmt.Fprintf(out, "* %s\n", unpricedNote)
+	}
+	if s.Start != "" {
+		fmt.Fprintf(out, "Period: %s to %s (UTC days, inclusive)\n", s.Start, s.End)
 	}
 	return nil
 }

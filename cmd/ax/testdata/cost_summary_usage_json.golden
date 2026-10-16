@@ -1,0 +1,38 @@
+{
+  "by": "agent",
+  "atespace": "team",
+  "source": "usage",
+  "start": "2026-09-17",
+  "end": "2026-10-16",
+  "currency": "USD",
+  "groups": [
+    {
+      "group": "coder",
+      "tasks": 1,
+      "activeSeconds": 300,
+      "idleSeconds": 0,
+      "tokens": 0,
+      "cost": {
+        "compute": 0.003708,
+        "idle": 0,
+        "tokens": 0,
+        "storage": 0,
+        "total": 0.003708
+      }
+    }
+  ],
+  "total": {
+    "group": "TOTAL",
+    "tasks": 1,
+    "activeSeconds": 300,
+    "idleSeconds": 0,
+    "tokens": 0,
+    "cost": {
+      "compute": 0.003708,
+      "idle": 0,
+      "tokens": 0,
+      "storage": 0,
+      "total": 0.003708
+    }
+  }
+}

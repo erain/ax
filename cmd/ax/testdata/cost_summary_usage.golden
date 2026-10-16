@@ -1,0 +1,7 @@
+GROUP      TASKS   ACTIVE   IDLE   TOKENS    COMPUTE   TOKENS$    STORAGE   TOTAL
+coder      1       35m0s    6m0s   99,400    $0.0427   $0.0499*   $0.0003   $0.0930
+reviewer   1       1m20s    0s     9,400     $0.0002   $0.0119    $0.0000   $0.0121
+<none>     1       0s       0s     0         $0.0000   $0.0000    $0.0013   $0.0013
+TOTAL      3       36m20s   6m0s   108,800   $0.0429   $0.0618*   $0.0017   $0.1064
+* tokens partially unpriced: some models are not on the rate card; their tokens are counted but not priced
+Period: 2026-09-17 to 2026-10-16 (UTC days, inclusive)
