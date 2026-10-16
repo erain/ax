@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/agent-substrate/env v0.0.11-0.20260912052224-4468a200b170
 	github.com/agent-substrate/substrate v0.4.1-0.20261009152331-f6a1dc72a35d
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/redis/go-redis/v9 v9.22.0
 	google.golang.org/grpc v1.83.2
@@ -16,6 +17,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

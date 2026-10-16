@@ -60,7 +60,6 @@ func (s *Store) taskKey(atespace, name string) string {
 	return fmt.Sprintf("%s:task:%s:%s", s.opts.KeyPrefix, atespace, name)
 }
 
-
 func (s *Store) modelKey(atespace, name string) string {
 	return fmt.Sprintf("%s:model:%s:%s", s.opts.KeyPrefix, atespace, name)
 }
@@ -164,32 +163,83 @@ func (s *Store) GetTask(ctx context.Context, atespace, name string) (*v1alpha1.T
 	return &task, nil
 }
 
-// ListTasks lists tasks ordered by newest first.
-func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset int64) ([]*v1alpha1.Task, error) {
+// listTasksScanBatch is how many index entries ListTasks fetches per round
+// trip when a label selector forces it to scan past non-matching tasks.
+const listTasksScanBatch = 256
+
+// ListTasks lists tasks ordered by newest first. With a non-empty selector it
+// scans the index in batches, skipping non-matching tasks, so offset and limit
+// apply to the matching tasks only.
+func (s *Store) ListTasks(ctx context.Context, atespace string, selector v1alpha1.LabelSelector, limit, offset int64) ([]*v1alpha1.Task, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	start := offset
-	stop := offset + limit - 1
-
-	var members []string
-	var err error
-
-	if atespace == "" || atespace == "*" {
-		members, err = s.client.ZRevRange(ctx, s.taskIndexKey(), start, stop).Result()
-	} else {
-		names, nErr := s.client.ZRevRange(ctx, s.taskAtespaceIndexKey(atespace), start, stop).Result()
-		if nErr == nil {
-			for _, n := range names {
-				members = append(members, fmt.Sprintf("%s:%s", atespace, n))
-			}
+	if offset < 0 {
+		offset = 0
+	}
+	if selector.Empty() {
+		members, err := s.taskIndexRange(ctx, atespace, offset, offset+limit-1)
+		if err != nil {
+			return nil, err
 		}
-		err = nErr
+		return s.fetchTasks(ctx, members)
 	}
 
+	tasks := []*v1alpha1.Task{}
+	skipped := int64(0)
+	for start := int64(0); ; start += listTasksScanBatch {
+		members, err := s.taskIndexRange(ctx, atespace, start, start+listTasksScanBatch-1)
+		if err != nil {
+			return nil, err
+		}
+		batch, err := s.fetchTasks(ctx, members)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range batch {
+			if !selector.Matches(t.GetMetadata().GetLabels()) {
+				continue
+			}
+			if skipped < offset {
+				skipped++
+				continue
+			}
+			tasks = append(tasks, t)
+			if int64(len(tasks)) == limit {
+				return tasks, nil
+			}
+		}
+		if len(members) < listTasksScanBatch {
+			return tasks, nil
+		}
+	}
+}
+
+// taskIndexRange returns the "atespace:name" members of the task index for
+// atespace ("" or "*" for all atespaces) between ranks start and stop
+// (inclusive), newest first.
+func (s *Store) taskIndexRange(ctx context.Context, atespace string, start, stop int64) ([]string, error) {
+	if atespace == "" || atespace == "*" {
+		members, err := s.client.ZRevRange(ctx, s.taskIndexKey(), start, stop).Result()
+		if err != nil {
+			return nil, fmt.Errorf("listing task index: %w", err)
+		}
+		return members, nil
+	}
+	names, err := s.client.ZRevRange(ctx, s.taskAtespaceIndexKey(atespace), start, stop).Result()
 	if err != nil {
 		return nil, fmt.Errorf("listing task index: %w", err)
 	}
+	members := make([]string, len(names))
+	for i, n := range names {
+		members[i] = fmt.Sprintf("%s:%s", atespace, n)
+	}
+	return members, nil
+}
+
+// fetchTasks loads the tasks for index members in order, skipping entries
+// whose record is missing or unreadable.
+func (s *Store) fetchTasks(ctx context.Context, members []string) ([]*v1alpha1.Task, error) {
 	if len(members) == 0 {
 		return []*v1alpha1.Task{}, nil
 	}
@@ -265,7 +315,6 @@ func (s *Store) DeleteTask(ctx context.Context, atespace, name string) error {
 	}
 	return nil
 }
-
 
 // SaveModel stores a model.
 func (s *Store) SaveModel(ctx context.Context, model *v1alpha1.Model) error {

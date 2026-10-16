@@ -777,6 +777,104 @@ func TestValidateLabels(t *testing.T) {
 	}
 }
 
+func TestParseLabelSelector(t *testing.T) {
+	tests := []struct {
+		name       string
+		in         string
+		wantString string
+		wantErr    string
+	}{
+		{name: "empty", in: ""},
+		{name: "whitespace", in: "  \t"},
+		{name: "single", in: "agent=coder", wantString: "agent=coder"},
+		{name: "multiple sorted", in: "customer=acme,agent=coder", wantString: "agent=coder,customer=acme"},
+		{name: "spaces", in: " agent = coder , customer=acme ", wantString: "agent=coder,customer=acme"},
+		{name: "double equals", in: "agent==coder", wantString: "agent=coder"},
+		{name: "empty value", in: "agent=", wantString: "agent="},
+		{name: "prefixed key", in: "ax.io/agent=coder", wantString: "ax.io/agent=coder"},
+		{name: "duplicate same value", in: "agent=a,agent=a", wantString: "agent=a"},
+		{name: "duplicate conflicting", in: "agent=a,agent=b", wantErr: "conflicting values"},
+		{name: "no equals", in: "agent", wantErr: "expected key=value"},
+		{name: "not equals", in: "agent!=coder", wantErr: "only equality"},
+		{name: "empty term", in: "agent=a,,customer=b", wantErr: "empty term"},
+		{name: "trailing comma", in: "agent=a,", wantErr: "empty term"},
+		{name: "empty key", in: "=coder", wantErr: "invalid key"},
+		{name: "bad key", in: "a b=c", wantErr: "invalid key"},
+		{name: "bad value", in: "agent=a/b", wantErr: "invalid value"},
+		{name: "value with equals", in: "agent=a=b", wantErr: "invalid value"},
+		{name: "set syntax", in: "agent in (a,b)", wantErr: "invalid label selector"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sel, err := v1alpha1.ParseLabelSelector(tt.in)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ParseLabelSelector(%q) error = %v, want containing %q", tt.in, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseLabelSelector(%q): %v", tt.in, err)
+			}
+			if got := sel.String(); got != tt.wantString {
+				t.Errorf("String() = %q, want %q", got, tt.wantString)
+			}
+			if sel.Empty() != (tt.wantString == "") {
+				t.Errorf("Empty() = %v for %q", sel.Empty(), tt.in)
+			}
+			// The canonical form parses back to the same selector.
+			again, err := v1alpha1.ParseLabelSelector(sel.String())
+			if err != nil || again.String() != sel.String() {
+				t.Errorf("reparse of %q = %q, %v", sel.String(), again.String(), err)
+			}
+		})
+	}
+}
+
+func TestLabelSelector_Matches(t *testing.T) {
+	labels := map[string]string{"agent": "coder", "customer": "acme", "empty": ""}
+	tests := []struct {
+		selector string
+		labels   map[string]string
+		want     bool
+	}{
+		{selector: "", labels: nil, want: true},
+		{selector: "", labels: labels, want: true},
+		{selector: "agent=coder", labels: labels, want: true},
+		{selector: "agent=coder,customer=acme", labels: labels, want: true},
+		{selector: "agent=coder,customer=other", labels: labels, want: false},
+		{selector: "agent=reviewer", labels: labels, want: false},
+		{selector: "missing=x", labels: labels, want: false},
+		{selector: "agent=coder", labels: nil, want: false},
+		{selector: "empty=", labels: labels, want: true},
+		{selector: "missing=", labels: labels, want: false},
+		{selector: "Agent=coder", labels: labels, want: false},
+	}
+	for _, tt := range tests {
+		sel, err := v1alpha1.ParseLabelSelector(tt.selector)
+		if err != nil {
+			t.Fatalf("ParseLabelSelector(%q): %v", tt.selector, err)
+		}
+		if got := sel.Matches(tt.labels); got != tt.want {
+			t.Errorf("%q.Matches(%v) = %v, want %v", tt.selector, tt.labels, got, tt.want)
+		}
+	}
+
+	// The zero value matches everything, and Requirements returns a copy.
+	if !(v1alpha1.LabelSelector{}).Matches(labels) {
+		t.Error("zero LabelSelector should match everything")
+	}
+	sel, _ := v1alpha1.ParseLabelSelector("agent=coder")
+	reqs := sel.Requirements()
+	if len(reqs) != 1 || reqs[0] != (v1alpha1.LabelRequirement{Key: "agent", Value: "coder"}) {
+		t.Fatalf("Requirements() = %v", reqs)
+	}
+	reqs[0].Value = "changed"
+	if !sel.Matches(labels) {
+		t.Error("mutating Requirements() result changed the selector")
+	}
+}
+
 func TestValidateTask_Budget(t *testing.T) {
 	tests := []struct {
 		name         string

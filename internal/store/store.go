@@ -30,7 +30,10 @@ var (
 type Store interface {
 	SaveTask(ctx context.Context, task *v1alpha1.Task) error
 	GetTask(ctx context.Context, atespace, name string) (*v1alpha1.Task, error)
-	ListTasks(ctx context.Context, atespace string, limit, offset int64) ([]*v1alpha1.Task, error)
+	// ListTasks returns tasks in atespace ("" or "*" for all atespaces) whose
+	// labels match selector, newest first. limit and offset page through the
+	// matching tasks; the selector is applied before pagination.
+	ListTasks(ctx context.Context, atespace string, selector v1alpha1.LabelSelector, limit, offset int64) ([]*v1alpha1.Task, error)
 	UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error
 	DeleteTask(ctx context.Context, atespace, name string) error
 

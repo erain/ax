@@ -160,9 +160,12 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 	}
 
 	// Only launch configuration belongs in the template; status changes
-	// must not create new golden snapshots.
+	// must not create new golden snapshots. Labels are cost-attribution
+	// metadata for the control plane: they stay out of the sandbox and out of
+	// the template digest, so labelling a task never creates a new template.
 	launchTask := proto.Clone(task).(*v1alpha1.Task)
 	launchTask.Status = nil
+	launchTask.Metadata.Labels = nil
 	if taskYAML, err := yaml.Marshal(launchTask); err == nil {
 		extraEnv["AX_TASK_YAML"] = string(taskYAML)
 	}
@@ -458,13 +461,19 @@ func (r *TaskReconciler) deleteTaskTemplates(ctx context.Context, atespace, task
 }
 
 // marshalWorkspaces renders the workspaces as a multi-document YAML stream in
-// order, skipping nil entries. It returns "" when there is nothing to render.
+// order, skipping nil entries and omitting labels. It returns "" when there is nothing to render.
 func marshalWorkspaces(workspaces []*v1alpha1.Workspace) (string, error) {
 	var sb strings.Builder
 	enc := yaml.NewEncoder(&sb)
 	for _, ws := range workspaces {
 		if ws == nil {
 			continue
+		}
+		// Like task labels, workspace labels stay out of the sandbox and the
+		// template digest.
+		if len(ws.GetMetadata().GetLabels()) > 0 {
+			ws = proto.Clone(ws).(*v1alpha1.Workspace)
+			ws.Metadata.Labels = nil
 		}
 		if err := enc.Encode(ws); err != nil {
 			return "", err

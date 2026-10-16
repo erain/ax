@@ -450,6 +450,93 @@ func ValidateLabels(labels map[string]string) error {
 	return nil
 }
 
+// LabelRequirement is one term of a LabelSelector: the label Key must be
+// present with exactly Value.
+type LabelRequirement struct {
+	Key   string
+	Value string
+}
+
+// LabelSelector selects objects by label equality. It is the conjunction of
+// its requirements, so an object matches only if it satisfies every term. The
+// zero value has no requirements and matches everything.
+type LabelSelector struct {
+	reqs []LabelRequirement // sorted by key, keys unique
+}
+
+// ParseLabelSelector parses a comma-separated list of equality terms such as
+// "agent=foo,customer=bar" (Kubernetes equality-based syntax; "k==v" is also
+// accepted). Whitespace around terms, keys and values is ignored. An empty or
+// all-whitespace string yields the empty selector, which matches everything.
+// Keys and values must be valid label keys and values; a key repeated with a
+// different value is an error.
+func ParseLabelSelector(s string) (LabelSelector, error) {
+	if strings.TrimSpace(s) == "" {
+		return LabelSelector{}, nil
+	}
+	byKey := make(map[string]string)
+	for _, term := range strings.Split(s, ",") {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: empty term", s)
+		}
+		if strings.Contains(term, "!=") {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: term %q: only equality (key=value) terms are supported", s, term)
+		}
+		k, v, ok := strings.Cut(term, "==")
+		if !ok {
+			k, v, ok = strings.Cut(term, "=")
+		}
+		if !ok {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: term %q: expected key=value", s, term)
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if err := ValidateLabelKey(k); err != nil {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: %w", s, err)
+		}
+		if err := ValidateLabelValue(v); err != nil {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: key %q: %w", s, k, err)
+		}
+		if prev, dup := byKey[k]; dup && prev != v {
+			return LabelSelector{}, fmt.Errorf("invalid label selector %q: key %q has conflicting values %q and %q", s, k, prev, v)
+		}
+		byKey[k] = v
+	}
+	sel := LabelSelector{reqs: make([]LabelRequirement, 0, len(byKey))}
+	for k, v := range byKey {
+		sel.reqs = append(sel.reqs, LabelRequirement{Key: k, Value: v})
+	}
+	slices.SortFunc(sel.reqs, func(a, b LabelRequirement) int { return strings.Compare(a.Key, b.Key) })
+	return sel, nil
+}
+
+// Empty reports whether the selector has no requirements (matches everything).
+func (s LabelSelector) Empty() bool { return len(s.reqs) == 0 }
+
+// Requirements returns a copy of the selector's terms, sorted by key.
+func (s LabelSelector) Requirements() []LabelRequirement { return slices.Clone(s.reqs) }
+
+// Matches reports whether labels satisfy every requirement. A nil map is
+// treated as having no labels.
+func (s LabelSelector) Matches(labels map[string]string) bool {
+	for _, r := range s.reqs {
+		if v, ok := labels[r.Key]; !ok || v != r.Value {
+			return false
+		}
+	}
+	return true
+}
+
+// String renders the selector in canonical form ("k1=v1,k2=v2", keys sorted).
+// Parsing the result yields an equal selector.
+func (s LabelSelector) String() string {
+	terms := make([]string, len(s.reqs))
+	for i, r := range s.reqs {
+		terms[i] = r.Key + "=" + r.Value
+	}
+	return strings.Join(terms, ",")
+}
+
 // Budgets.
 
 // BudgetCurrency is the only currency budgets and rate cards support.

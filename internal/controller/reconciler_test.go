@@ -17,8 +17,10 @@ package controller_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type mockControlServer struct {
@@ -43,6 +46,7 @@ type mockControlServer struct {
 	suspendErr        error
 	deletedActors     []string
 	actorTemplates    map[string]bool
+	createdTemplates  []*ateapipb.ActorTemplate
 	deletedTemplates  []string
 	getActorFunc      func(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	createAtespaceErr error
@@ -71,6 +75,7 @@ func (m *mockControlServer) CreateActorTemplate(_ context.Context, req *ateapipb
 	}
 	tmpl := req.GetActorTemplate()
 	m.actorTemplates[tmpl.GetMetadata().GetName()] = true
+	m.createdTemplates = append(m.createdTemplates, tmpl)
 	return tmpl, nil
 }
 
@@ -792,4 +797,110 @@ func TestTaskReconciler_TransientSubstrateUnavailable(t *testing.T) {
 		t.Errorf("expected Phase='Failed' on permanent error, got %q", reconciled4.GetStatus().GetPhase())
 	}
 	mockSrv.createActorErr = nil
+}
+
+// reconcileTemplate reconciles task (suspended) against a fresh mock Substrate
+// and returns the single ActorTemplate created for it.
+func reconcileTemplate(t *testing.T, task *v1alpha1.Task, workspaces ...*v1alpha1.Workspace) *ateapipb.ActorTemplate {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	mockSrv := &mockControlServer{}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	t.Cleanup(grpcServer.Stop)
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", v1alpha1.DefaultSystemNamespace)
+	reconciler.SecretResolver = noSecrets
+	if _, err := reconciler.Reconcile(context.Background(), task, workspaces...); err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+	if len(mockSrv.createdTemplates) != 1 {
+		t.Fatalf("expected one ActorTemplate created, got %d", len(mockSrv.createdTemplates))
+	}
+	return mockSrv.createdTemplates[0]
+}
+
+func templateEnv(tmpl *ateapipb.ActorTemplate) map[string]string {
+	env := make(map[string]string)
+	for _, c := range tmpl.GetContainers() {
+		for _, e := range c.GetEnv() {
+			env[e.GetName()] = e.GetValue()
+		}
+	}
+	return env
+}
+
+func TestTaskReconciler_LabelsStayOutOfSandbox(t *testing.T) {
+	// Keep the server's own key out of the template env.
+	t.Setenv("GEMINI_API_KEY", "")
+	created := timestamppb.New(time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+	newTask := func(labels map[string]string) *v1alpha1.Task {
+		return &v1alpha1.Task{
+			ApiVersion: v1alpha1.APIVersion,
+			Kind:       v1alpha1.KindTask,
+			Metadata: &v1alpha1.ObjectMeta{
+				Name:              "labelled-task",
+				Atespace:          "default",
+				CreationTimestamp: created,
+				Labels:            labels,
+			},
+			Spec: &v1alpha1.TaskSpec{
+				Image:      "ghrc.io/my-org/my-image",
+				Command:    []string{"/bin/task-runner"},
+				Workspaces: []*v1alpha1.WorkspaceRef{{Name: "ws"}},
+			},
+			Status: &v1alpha1.TaskStatus{Phase: "Suspended"},
+		}
+	}
+	newWorkspace := func(labels map[string]string) *v1alpha1.Workspace {
+		return &v1alpha1.Workspace{
+			ApiVersion: v1alpha1.APIVersion,
+			Kind:       v1alpha1.KindWorkspace,
+			Metadata:   &v1alpha1.ObjectMeta{Name: "ws", Atespace: "default", Labels: labels},
+			Spec:       &v1alpha1.WorkspaceSpec{},
+		}
+	}
+
+	labels := map[string]string{"agent": "secret-agent-label", "customer": "acme-corp-label"}
+	task := newTask(labels)
+	labelled := reconcileTemplate(t, task, newWorkspace(labels))
+	plain := reconcileTemplate(t, newTask(nil), newWorkspace(nil))
+
+	env := templateEnv(labelled)
+	for _, key := range []string{"AX_TASK_YAML", "AX_WORKSPACES_YAML"} {
+		v, ok := env[key]
+		if !ok {
+			t.Fatalf("%s not injected; env keys: %v", key, slices.Sorted(maps.Keys(env)))
+		}
+		for _, needle := range []string{"labels", "secret-agent-label", "acme-corp-label"} {
+			if strings.Contains(v, needle) {
+				t.Errorf("%s contains %q:\n%s", key, needle, v)
+			}
+		}
+		if v != templateEnv(plain)[key] {
+			t.Errorf("%s differs between labelled and unlabelled task:\n%s\nvs\n%s", key, v, templateEnv(plain)[key])
+		}
+	}
+	if !strings.Contains(env["AX_TASK_YAML"], "name: labelled-task") {
+		t.Errorf("AX_TASK_YAML lost task metadata:\n%s", env["AX_TASK_YAML"])
+	}
+
+	// Labels do not feed the template digest.
+	if got, want := labelled.GetMetadata().GetName(), plain.GetMetadata().GetName(); got != want {
+		t.Errorf("template name with labels = %q, without = %q; want equal", got, want)
+	}
+	// Reconcile must not strip the caller's labels.
+	if len(task.GetMetadata().GetLabels()) != 2 {
+		t.Errorf("Reconcile mutated task labels: %v", task.GetMetadata().GetLabels())
+	}
 }

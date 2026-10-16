@@ -194,10 +194,15 @@ func TestRunGetResourceAliases(t *testing.T) {
 					if len(rows) != 3 {
 						t.Fatalf("expected header and two resources, got %q", data)
 					}
+					// Task tables have an AGENT column between NAME and ATESPACE.
+					atespaceCol := 1
+					if resource == "task" {
+						atespaceCol = 2
+					}
 					seen := make(map[string]bool)
 					for _, row := range rows[1:] {
 						fields := strings.Fields(row)
-						if len(fields) < 2 || fields[1] != atespace {
+						if len(fields) <= atespaceCol || fields[atespaceCol] != atespace {
 							t.Fatalf("unexpected resource row: %q", row)
 						}
 						seen[fields[0]] = true
@@ -378,5 +383,119 @@ func TestParseSSHArgs(t *testing.T) {
 					tt.args, task, command, help, tt.wantTask, tt.wantCommand, tt.wantHelp)
 			}
 		})
+	}
+}
+
+func TestParseGetArgs(t *testing.T) {
+	tests := []struct {
+		args         []string
+		wantPos      []string
+		wantSelector string
+		wantErr      bool
+	}{
+		{args: []string{"tasks"}, wantPos: []string{"tasks"}},
+		{args: []string{"tasks", "-l", "agent=foo,customer=bar"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo,customer=bar"},
+		{args: []string{"-l", "agent=foo", "tasks"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo"},
+		{args: []string{"tasks", "--selector", "agent=foo"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo"},
+		{args: []string{"tasks", "--selector=agent=foo"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo"},
+		{args: []string{"tasks", "-l=agent=foo"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo"},
+		{args: []string{"task", "name"}, wantPos: []string{"task", "name"}},
+		{args: []string{"tasks", "-l"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		pos, sel, err := parseGetArgs(tt.args)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseGetArgs(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
+			continue
+		}
+		if tt.wantErr {
+			continue
+		}
+		if !reflect.DeepEqual(pos, tt.wantPos) || sel != tt.wantSelector {
+			t.Errorf("parseGetArgs(%q) = %q, %q; want %q, %q", tt.args, pos, sel, tt.wantPos, tt.wantSelector)
+		}
+	}
+
+	// The global parser leaves -l and its value for the command.
+	g := parseGlobalArgs([]string{"get", "tasks", "-a", "team", "-l", "agent=foo"})
+	if g.cmd != "get" || g.atespace != "team" || !reflect.DeepEqual(g.args, []string{"tasks", "-l", "agent=foo"}) {
+		t.Errorf("parseGlobalArgs = %+v", g)
+	}
+}
+
+func TestRunGetTasksLabelSelector(t *testing.T) {
+	s := memory.NewStore()
+	for name, labels := range map[string]map[string]string{
+		"coder-acme":    {"agent": "coder", "customer": "acme"},
+		"coder-globex":  {"agent": "coder", "customer": "globex"},
+		"reviewer-acme": {"agent": "reviewer", "customer": "acme"},
+		"unlabeled":     nil,
+	} {
+		if err := s.SaveTask(context.Background(), &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: name, Labels: labels}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := server.NewServer(s).GRPCServer()
+	t.Cleanup(srv.Stop)
+	go func() { _ = srv.Serve(listener) }()
+
+	for _, tc := range []struct {
+		args []string
+		want map[string]string // task name -> AGENT column
+	}{
+		{args: []string{"tasks"}, want: map[string]string{"coder-acme": "coder", "coder-globex": "coder", "reviewer-acme": "reviewer", "unlabeled": "-"}},
+		{args: []string{"tasks", "-l", "agent=coder"}, want: map[string]string{"coder-acme": "coder", "coder-globex": "coder"}},
+		{args: []string{"tasks", "-l", "agent=coder,customer=acme"}, want: map[string]string{"coder-acme": "coder"}},
+		{args: []string{"tasks", "--selector=customer=acme"}, want: map[string]string{"coder-acme": "coder", "reviewer-acme": "reviewer"}},
+		{args: []string{"tasks", "-l", "agent=nobody"}, want: map[string]string{}},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			// runGet writes to os.Stdout, so these subtests must remain sequential.
+			output, err := os.CreateTemp(t.TempDir(), "stdout")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout := os.Stdout
+			os.Stdout = output
+			t.Cleanup(func() {
+				os.Stdout = stdout
+				_ = output.Close()
+			})
+			if err := runGet(listener.Addr().String(), "default", tc.args); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(output.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if header := strings.Fields(rows[0]); len(header) < 3 || header[0] != "NAME" || header[1] != "AGENT" || header[2] != "ATESPACE" {
+				t.Fatalf("unexpected header %q", rows[0])
+			}
+			got := make(map[string]string)
+			for _, row := range rows[1:] {
+				fields := strings.Fields(row)
+				got[fields[0]] = fields[1]
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("rows = %v, want %v; output:\n%s", got, tc.want, data)
+			}
+		})
+	}
+
+	// Invalid selectors and selectors on other resources fail before any output.
+	for _, args := range [][]string{
+		{"tasks", "-l", "agent"},
+		{"tasks", "-l", "agent!=coder"},
+		{"task", "coder-acme", "-l", "agent=coder"},
+		{"workspaces", "-l", "agent=coder"},
+	} {
+		if err := runGet(listener.Addr().String(), "default", args); err == nil {
+			t.Errorf("runGet(%q) succeeded, want error", args)
+		}
 	}
 }

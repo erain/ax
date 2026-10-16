@@ -200,7 +200,7 @@ Usage:
 
 Available Commands:
   apply -f <file>         Apply resources (tasks, workspaces, models) from a file or stdin
-  get tasks               List tasks
+  get tasks [-l k=v,...]  List tasks, optionally filtered by label selector
   get task <name>         Get a specific task
   get workspaces          List workspaces
   get workspace <name>    Get a specific workspace
@@ -359,12 +359,47 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 	return "configured", nil
 }
 
+// parseGetArgs separates the label selector flag (-l/--selector, kubectl
+// style) from the positional arguments of `ax get`.
+func parseGetArgs(args []string) (positional []string, selector string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-l" || arg == "--selector":
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("flag %s requires a value (e.g. %s agent=foo,customer=bar)", arg, arg)
+			}
+			selector = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--selector="):
+			selector = strings.TrimPrefix(arg, "--selector=")
+		case strings.HasPrefix(arg, "-l="):
+			selector = strings.TrimPrefix(arg, "-l=")
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	return positional, selector, nil
+}
+
 func runGet(serverURL, atespace string, args []string) error {
+	args, selector, err := parseGetArgs(args)
+	if err != nil {
+		return err
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
 	}
 
 	resource := strings.ToLower(args[0])
+	if selector != "" {
+		if (resource != "tasks" && resource != "task") || len(args) != 1 {
+			return fmt.Errorf("label selector (-l) is only supported by 'ax get tasks'")
+		}
+		if _, err := v1alpha1.ParseLabelSelector(selector); err != nil {
+			return err
+		}
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -376,52 +411,11 @@ func runGet(serverURL, atespace string, args []string) error {
 	defer cancel()
 
 	if (resource == "tasks" || resource == "task") && len(args) == 1 {
-		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
+		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace, LabelSelector: selector})
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
 		}
-
-		tasks := resp.Tasks
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
-		for _, t := range tasks {
-			workerIP := ""
-			actor := ""
-			phase := "Pending"
-			if t.Status != nil {
-				workerIP = t.Status.WorkerIp
-				actor = t.Status.Actor
-				if t.Status.Phase != "" {
-					phase = t.Status.Phase
-				}
-			}
-			if workerIP == "" {
-				workerIP = "<none>"
-			}
-			if actor == "" {
-				actor = "<none>"
-			}
-			age := "<unknown>"
-			name := ""
-			tAtespace := ""
-			if t.Metadata != nil {
-				name = t.Metadata.Name
-				tAtespace = t.Metadata.Atespace
-				if t.Metadata.CreationTimestamp != nil {
-					age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
-				}
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				name,
-				tAtespace,
-				phase,
-				actor,
-				workerIP,
-				age,
-			)
-		}
-		return w.Flush()
+		return writeTaskTable(os.Stdout, resp.Tasks)
 	}
 
 	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
@@ -433,7 +427,6 @@ func runGet(serverURL, atespace string, args []string) error {
 
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
-
 
 	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
@@ -640,7 +633,6 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		}
 		return nil
 	}
-
 
 	task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 	if err != nil {
@@ -1186,3 +1178,55 @@ func stdinIsTerminal() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
+
+// writeTaskTable prints tasks as the `ax get tasks` table. The AGENT column is
+// the task's "agent" label, or "-" when it has none.
+func writeTaskTable(out io.Writer, tasks []*v1alpha1.Task) error {
+	w := tabwriter.NewWriter(out, 0, 8, 3, ' ', 0)
+	fmt.Fprintln(w, "NAME\tAGENT\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
+	for _, t := range tasks {
+		workerIP := ""
+		actor := ""
+		phase := "Pending"
+		if t.Status != nil {
+			workerIP = t.Status.WorkerIp
+			actor = t.Status.Actor
+			if t.Status.Phase != "" {
+				phase = t.Status.Phase
+			}
+		}
+		if workerIP == "" {
+			workerIP = "<none>"
+		}
+		if actor == "" {
+			actor = "<none>"
+		}
+		agent := t.GetMetadata().GetLabels()[labelAgent]
+		if agent == "" {
+			agent = "-"
+		}
+		age := "<unknown>"
+		name := ""
+		tAtespace := ""
+		if t.Metadata != nil {
+			name = t.Metadata.Name
+			tAtespace = t.Metadata.Atespace
+			if t.Metadata.CreationTimestamp != nil {
+				age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			name,
+			agent,
+			tAtespace,
+			phase,
+			actor,
+			workerIP,
+			age,
+		)
+	}
+	return w.Flush()
+}
+
+// labelAgent is the task label shown in the AGENT column.
+const labelAgent = "agent"
