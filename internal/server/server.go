@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/ax/internal/lock"
@@ -201,7 +202,22 @@ func (s *Server) CreateTask(ctx context.Context, req *v1alpha1.CreateTaskRequest
 	// a new task is assigned by the reconciler, never by the client.
 	task.Status.Usage = nil
 	if errors.Is(err, store.ErrNotFound) {
+		// Budget/Idle conditions are server-computed too.
 		task.Status.ActorUid = ""
+		task.Status.Conditions = slices.DeleteFunc(task.Status.Conditions, func(c *v1alpha1.Condition) bool {
+			switch c.GetType() {
+			case v1alpha1.ConditionBudgetWarning, v1alpha1.ConditionBudgetExceeded, v1alpha1.ConditionIdle:
+				return true
+			}
+			return false
+		})
+		// A previous task with the same name may have left a usage record
+		// (e.g. late events racing its delete). Drop it under the task lock
+		// before the new task exists, so the new task never shows stale
+		// usage or conditions; the new actor's events arrive after this.
+		if err := s.dropOrphanUsage(ctx, atespace, taskName); err != nil {
+			return nil, status.Errorf(codes.Internal, "clearing stale usage of task %s/%s: %v", atespace, taskName, err)
+		}
 	}
 	task.Status.Phase = "Suspended"
 	if err := s.store.SaveTask(ctx, task); err != nil {
