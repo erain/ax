@@ -358,7 +358,13 @@ type AccountingState struct {
 	// past its last sample. Zero = DefaultSampleGapCap.
 	SampleGapCap time.Duration `json:"sampleGapCap,omitempty"`
 	// IdleStreakStart is the start of the current low-cpu streak (zero = none).
+	// It is never before LastTokenActivity.
 	IdleStreakStart time.Time `json:"idleStreakStart,omitzero"`
+	// LastTokenActivity is the report time of the newest runner report that
+	// brought new tokens (non-zero token delta). An agent waiting on an LLM
+	// call uses almost no cpu, so new tokens count as activity: the low-cpu
+	// streak never starts before this time.
+	LastTokenActivity time.Time `json:"lastTokenActivity,omitzero"`
 
 	// RunnerSession is the session of the last applied runner report.
 	RunnerSession string `json:"runnerSession,omitempty"`

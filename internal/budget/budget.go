@@ -197,7 +197,8 @@ func (r Result) Conditions() []*v1alpha1.Condition {
 //
 // Idle is True when the task phase is Running and either the runner reported
 // the command exited or the current low-cpu streak (from the accounting
-// state) lasts at least cfg.IdleAfter.
+// state; it restarts at every runner report that brings new tokens) lasts at
+// least cfg.IdleAfter.
 func Evaluate(task *v1alpha1.Task, u *usage.TaskUsage, cfg Config, now time.Time) Result {
 	cfg = cfg.withDefaults()
 	if u == nil {
@@ -422,7 +423,7 @@ func idleCondition(task *v1alpha1.Task, u *usage.TaskUsage, cfg Config, ts *time
 	}
 	if streak := IdleStreak(u); streak >= cfg.IdleAfter {
 		c.Status, c.Reason = StatusTrue, ReasonLowCPU
-		c.Message = fmt.Sprintf("cpu below %s vCPU for %s; %s",
+		c.Message = fmt.Sprintf("cpu below %s vCPU and no new tokens for %s; %s",
 			strconv.FormatFloat(cfg.IdleCPUThreshold, 'g', -1, 64), fmtSeconds(streak.Seconds()), totals)
 		return c
 	}
@@ -432,15 +433,22 @@ func idleCondition(task *v1alpha1.Task, u *usage.TaskUsage, cfg Config, ts *time
 
 // IdleStreak is the length of the current low-cpu streak: from the streak
 // start to the latest sample of the current epoch (0 when there is no streak).
+// Like the accounting, the streak never starts before the last runner report
+// that brought new tokens (State.LastTokenActivity), so an agent waiting on
+// an LLM call is not idle.
 func IdleStreak(u *usage.TaskUsage) time.Duration {
 	if u == nil || u.State.IdleStreakStart.IsZero() {
 		return 0
 	}
+	start := u.State.IdleStreakStart
+	if start.Before(u.State.LastTokenActivity) {
+		start = u.State.LastTokenActivity
+	}
 	last, ok := u.State.LastSample[u.State.CurrentEpoch]
-	if !ok || !last.Time.After(u.State.IdleStreakStart) {
+	if !ok || !last.Time.After(start) {
 		return 0
 	}
-	return last.Time.Sub(u.State.IdleStreakStart)
+	return last.Time.Sub(start)
 }
 
 func currencyOf(u *usage.TaskUsage, cfg Config) string {

@@ -69,10 +69,24 @@ compute: { default: { vcpuHour: 0.0445, gibHour: 0.0049 }, pools: {} }
 storage: { gibMonth: 0.020 }                    # GiB-month = 30 days
 models:                                         # USD per 1M tokens
   gemini-2.5-flash: { input: 0.30, output: 2.50, cacheRead: 0.03 }
-idle: { cpuThreshold: 0.02, after: 5m }         # Idle: < 0.02 vCPU for 5m, or the command exited
+idle: { cpuThreshold: 0.02, after: 5m }         # Idle: < 0.02 vCPU and no new tokens for 5m, or the command exited
 budgets: { defaultWarnAtPercent: 80 }
 metricLabels: [agent, customer]                 # task labels promoted to metric attributes (ax.label.<key>)
 ```
+
+**Idle rule.** A task is idle when its cpu rate stays below `idle.cpuThreshold`
+for `idle.after`, or when the runner reported that the command exited. An agent
+waiting on an LLM call uses almost no cpu (below 0.02 vCPU on the cluster), so
+a runner report that brings new tokens (a non-zero token delta) also counts as
+activity. The low-cpu streak never starts before the last such report
+(`lastTokenActivity` in the usage record): a report restarts a running streak
+at its report time. Idle that was already counted is never taken back, so a
+report that arrives late does not change past idle seconds; it only delays the
+next idle interval. The `Idle` condition uses the same streak, so it turns
+`True` exactly when idle time starts to accrue (message `cpu below 0.02 vCPU
+and no new tokens for 6m0s; ...`). The report time is when the runner served the
+pull, so token activity is dated up to one pull interval late; an agent that
+gets an LLM response at least every `idle.after` is never idle.
 
 Token counts follow the OTel GenAI conventions: input includes cache
 read/write tokens, and output includes reasoning tokens. A provider-reported

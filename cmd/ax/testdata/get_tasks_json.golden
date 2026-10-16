@@ -1,0 +1,65 @@
+{
+  "tasks": [
+    {
+      "metadata": {
+        "name": "coder-globex",
+        "atespace": "default",
+        "creationTimestamp": "2026-10-16T09:00:00Z",
+        "labels": {
+          "agent": "coder",
+          "customer": "globex"
+        }
+      },
+      "spec": {
+        "budget": {
+          "maxCost": {
+            "amount": 1
+          }
+        }
+      },
+      "status": {
+        "phase": "Suspended",
+        "actor": "coder-globex",
+        "conditions": [
+          {
+            "type": "BudgetWarning",
+            "status": "False",
+            "lastTransitionTime": "2026-10-16T11:58:00Z",
+            "reason": "BudgetExceeded",
+            "message": "cost $1.23 of $1.00 (123%)"
+          },
+          {
+            "type": "BudgetExceeded",
+            "status": "True",
+            "lastTransitionTime": "2026-10-16T11:58:00Z",
+            "reason": "MaxCostExceeded",
+            "message": "cost $1.23 of $1.00 (123%)"
+          }
+        ],
+        "usage": {
+          "activeDuration": "7500s",
+          "cpuSeconds": 5400,
+          "memoryGibSeconds": 9000,
+          "workspaceBytes": "3221225472",
+          "idleDuration": "600s",
+          "tokens": [
+            {
+              "model": "gemini-2.5-pro",
+              "input": "400000",
+              "output": "60000",
+              "cacheRead": "100000"
+            }
+          ],
+          "cost": {
+            "currency": "USD",
+            "total": 1.2345,
+            "compute": 0.21,
+            "tokens": 1.02,
+            "storage": 0.0045,
+            "idle": 0.012
+          }
+        }
+      }
+    }
+  ]
+}
