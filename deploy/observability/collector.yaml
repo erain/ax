@@ -61,7 +61,8 @@ data:
         check_interval: 1s
         limit_percentage: 80
         spike_limit_percentage: 20
-      batch: {}
+      batch:
+        send_batch_max_size: 8192
       # Keep only Substrate actor events. The filter processor DROPS records
       # for which a condition is true, hence the negation. event_name is the
       # OTLP LogRecord field (not an attribute); the body match is a fallback
@@ -94,7 +95,9 @@ data:
           max_elapsed_time: 10m
         sending_queue:
           enabled: true
-          num_consumers: 2
+          # Single consumer: a retried batch blocks later batches, preserving
+          # the order of actor state events for ax-server's accounting.
+          num_consumers: 1
           queue_size: 5000
       # Temporary: prints one line per batch of filtered actor events so the
       # tee can be verified with `kubectl logs`. Remove once ax-server ingests.
