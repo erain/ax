@@ -20,6 +20,7 @@ TASK_RUNNER_REPO ?= $(AX_IMAGE_REPO)/ax-task-runner
 CONTAINER_CLI ?= $(shell which podman 2>/dev/null || which docker 2>/dev/null)
 
 .PHONY: all build build-binaries build-task-runner install push push-task-runner deploy deploy-server deploy-redis apply-example test clean proto
+.PHONY: finops-render deploy-finops deploy-finops-dry-run
 
 all: build
 
@@ -97,6 +98,31 @@ deploy-redis:
 deploy-server:
 	@echo "==> Building and deploying ax-server using ko..."
 	KO_DOCKER_REPO=$(AX_IMAGE_REPO) ko apply -f deploy/ax-server.yaml
+
+# AX with FinOps (deploy/finops kustomization: ax-server + Redis + rate card,
+# OTLP ingest on :4318, OTel env). The kube context is always explicit.
+FINOPS_KUBE_CONTEXT ?= gke_yiyu-gke-dev_us-central1-a_ax-finops-poc
+FINOPS_IMAGE_REPO ?= us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops
+FINOPS_KUSTOMIZE := kubectl kustomize --load-restrictor=LoadRestrictionsNone deploy/finops
+
+# Render the FinOps manifests (ax-server image still a ko:// reference).
+finops-render:
+	@$(FINOPS_KUSTOMIZE)
+
+# Build and push ax-server with ko, apply everything, wait for the rollout.
+deploy-finops:
+	@echo "==> Deploying AX (FinOps) to $(FINOPS_KUBE_CONTEXT)..."
+	set -o pipefail; $(FINOPS_KUSTOMIZE) | \
+		KO_DOCKER_REPO=$(FINOPS_IMAGE_REPO) ko resolve -B --platform=linux/amd64 -f - | \
+		kubectl --context $(FINOPS_KUBE_CONTEXT) apply -f -
+	kubectl --context $(FINOPS_KUBE_CONTEXT) -n ax-system rollout status deployment/ax-redis --timeout=180s
+	kubectl --context $(FINOPS_KUBE_CONTEXT) -n ax-system rollout status deployment/ax-server --timeout=300s
+
+# Server-side dry run of the same manifests; ko builds locally without pushing.
+deploy-finops-dry-run:
+	set -o pipefail; $(FINOPS_KUSTOMIZE) | \
+		KO_DOCKER_REPO=$(FINOPS_IMAGE_REPO) ko resolve -B --platform=linux/amd64 --push=false -f - | \
+		kubectl --context $(FINOPS_KUBE_CONTEXT) apply --dry-run=server -f -
 
 # Apply example task and resources
 apply-example:
