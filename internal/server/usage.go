@@ -128,6 +128,43 @@ type finops struct {
 
 	mu      sync.RWMutex
 	flusher UsageFlusher
+
+	// checked holds, per task, the record of the last write whose budget
+	// check the commit observer already ran, so the hook that follows the
+	// same write skips its redundant pre-check (one entry per task).
+	checkedMu sync.Mutex
+	checked   map[usage.Key]*usage.TaskUsage
+}
+
+func (f *finops) markChecked(key usage.Key, u *usage.TaskUsage) {
+	f.checkedMu.Lock()
+	defer f.checkedMu.Unlock()
+	if f.checked == nil {
+		f.checked = map[usage.Key]*usage.TaskUsage{}
+	}
+	f.checked[normKey(key)] = u
+}
+
+// takeChecked reports (and forgets) whether the commit observer already
+// checked the write that produced snapshot u.
+func (f *finops) takeChecked(key usage.Key, u *usage.TaskUsage) bool {
+	if u == nil {
+		return false
+	}
+	f.checkedMu.Lock()
+	defer f.checkedMu.Unlock()
+	key = normKey(key)
+	if f.checked[key] != u {
+		return false
+	}
+	delete(f.checked, key)
+	return true
+}
+
+func (f *finops) forgetChecked(key usage.Key) {
+	f.checkedMu.Lock()
+	delete(f.checked, normKey(key))
+	f.checkedMu.Unlock()
 }
 
 func newFinops(s *Server, o *UsageOptions) *finops {
@@ -153,8 +190,9 @@ func newFinops(s *Server, o *UsageOptions) *finops {
 	if f.logger == nil {
 		f.logger = slog.Default()
 	}
-	f.store = &observedStore{Store: o.Store, onCommit: func(ctx context.Context, key usage.Key) {
+	f.store = &observedStore{Store: o.Store, onCommit: func(ctx context.Context, key usage.Key, u *usage.TaskUsage) {
 		s.checkBudget(ctx, key, nil)
+		f.markChecked(key, u)
 	}}
 	var hooks hookFanout
 	if f.metrics != nil {
@@ -201,20 +239,25 @@ func (f *finops) getFlusher() UsageFlusher {
 // observedStore notifies onCommit after every Update that wrote the record,
 // including writes whose delta is zero (state-only changes such as a runner
 // reporting commandExited), which usage hooks never see (R2).
+//
+// onCommit also receives the committed record: the same pointer the writer
+// (ingestor, puller) passes to its hooks as the snapshot.
 type observedStore struct {
 	usage.Store
-	onCommit func(ctx context.Context, key usage.Key)
+	onCommit func(ctx context.Context, key usage.Key, u *usage.TaskUsage)
 }
 
 func (o *observedStore) Update(ctx context.Context, key usage.Key, fn func(*usage.TaskUsage) error) error {
 	skipped := false
+	var last *usage.TaskUsage
 	err := o.Store.Update(ctx, key, func(u *usage.TaskUsage) error {
 		ferr := fn(u)
 		skipped = errors.Is(ferr, usage.ErrNoChange)
+		last = u
 		return ferr
 	})
 	if err == nil && !skipped {
-		o.onCommit(ctx, key)
+		o.onCommit(ctx, key, last)
 	}
 	return err
 }
@@ -228,10 +271,16 @@ func (h hookFanout) OnDelta(ctx context.Context, key usage.Key, d usage.Delta, c
 	}
 }
 
-// budgetHook evaluates budgets on every non-zero usage delta.
+// budgetHook evaluates budgets on every non-zero usage delta. Writes made
+// through UsageStore() were already checked by the commit observer (on a
+// fresh read, at least as new as the hook's snapshot), so the hook skips
+// those and only checks deltas from other writers.
 type budgetHook struct{ s *Server }
 
 func (b budgetHook) OnDelta(ctx context.Context, key usage.Key, _ usage.Delta, _ usage.Cost, u *usage.TaskUsage) {
+	if b.s.fin.takeChecked(key, u) {
+		return
+	}
 	b.s.checkBudget(ctx, key, u)
 }
 
@@ -613,6 +662,7 @@ func (s *Server) deleteUsage(ctx context.Context, atespace, name string) {
 		s.fin.logger.WarnContext(ctx, "deleting task usage failed", "atespace", atespace, "task", name, "error", err)
 	}
 	s.fin.labels.Invalidate(key)
+	s.fin.forgetChecked(key)
 }
 
 // --- labels ---
@@ -721,4 +771,19 @@ func (s *Server) afterSuspend(ctx context.Context, task *v1alpha1.Task, ev budge
 		u, _ = s.fin.get(ctx, keyOf(task))
 	}
 	s.logSummary(ctx, metrics.ReasonSuspend, task, u)
+}
+
+// dropOrphanUsage deletes a leftover usage record for a task that is being
+// created (the caller holds the task lock; usage Delete is allowed under it).
+func (s *Server) dropOrphanUsage(ctx context.Context, atespace, name string) error {
+	if s.fin == nil {
+		return nil
+	}
+	key := usage.Key{Atespace: atespace, Name: name}
+	if err := s.fin.store.Delete(ctx, key); err != nil {
+		return err
+	}
+	s.fin.labels.Invalidate(key)
+	s.fin.forgetChecked(key)
+	return nil
 }

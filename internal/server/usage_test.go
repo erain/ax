@@ -1051,3 +1051,129 @@ func TestFinOps_ConcurrentWritersNoDeadlock(t *testing.T) {
 		t.Errorf("threshold crossings = %v, want 1", v)
 	}
 }
+
+// N1: creating a task whose name has a leftover usage record (e.g. late
+// events that raced the previous task's delete) starts from zero usage; an
+// existing task's usage is never dropped by a create call.
+func TestFinOps_CreateTaskDropsOrphanUsage(t *testing.T) {
+	e := newFinopsEnv(t, envOptions{})
+	ctx := context.Background()
+	key := usage.Key{Atespace: "default", Name: "t1"}
+	if err := e.usage.Update(ctx, key, func(u *usage.TaskUsage) error {
+		u.CPUSeconds = 99
+		u.Cost = usage.Cost{Currency: "USD", Total: 0.5, Compute: 0.5}
+		u.State.ActorUID = "old-actor"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t1"},
+		Spec:     &v1alpha1.TaskSpec{Image: "alpine", Budget: &v1alpha1.BudgetSpec{MaxCost: &v1alpha1.Money{Currency: "USD", Amount: 0.01}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.usage.Get(ctx, key); !errors.Is(err, usage.ErrNotFound) {
+		t.Errorf("orphan usage survived CreateTask: err = %v", err)
+	}
+	got := e.get(t, "default", "t1")
+	if got.GetStatus().GetUsage() != nil || got.GetStatus().GetActorUid() != "" {
+		t.Errorf("new task shows stale usage: %v", got.GetStatus())
+	}
+	if c := condition(got, v1alpha1.ConditionBudgetExceeded); c != nil {
+		t.Errorf("new task shows stale budget condition: %v", c)
+	}
+
+	// The task now exists: a (rejected) create must not touch its usage.
+	if err := e.usage.Update(ctx, key, func(u *usage.TaskUsage) error { u.CPUSeconds = 3; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t1"},
+		Spec:     &v1alpha1.TaskSpec{Image: "other"},
+	}}); err == nil {
+		t.Fatal("create of an existing task with another spec succeeded")
+	}
+	if u, err := e.usage.Get(ctx, key); err != nil || u.CPUSeconds != 3 {
+		t.Errorf("existing task usage = %v, %v; want cpu 3", u, err)
+	}
+}
+
+// N5: client-supplied BudgetWarning/BudgetExceeded/Idle conditions are not
+// stored on a new task (they are server-computed); other conditions stay.
+func TestFinOps_CreateTaskClearsClientBudgetConditions(t *testing.T) {
+	e := newFinopsEnv(t, envOptions{})
+	ctx := context.Background()
+	if _, err := e.srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t1"},
+		Spec:     &v1alpha1.TaskSpec{Image: "alpine"},
+		Status: &v1alpha1.TaskStatus{
+			ActorUid: "forged",
+			Conditions: []*v1alpha1.Condition{
+				{Type: v1alpha1.ConditionBudgetExceeded, Status: "True", Reason: "MaxCostExceeded"},
+				{Type: v1alpha1.ConditionBudgetWarning, Status: "True", Reason: "MaxCostWarning"},
+				{Type: v1alpha1.ConditionIdle, Status: "True", Reason: "LowCPU"},
+				{Type: "Custom", Status: "True", Reason: "Kept"},
+			},
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	stored := e.stored(t, "default", "t1")
+	for _, typ := range []string{v1alpha1.ConditionBudgetExceeded, v1alpha1.ConditionBudgetWarning, v1alpha1.ConditionIdle} {
+		if c := condition(stored, typ); c != nil {
+			t.Errorf("client-supplied %s condition stored: %v", typ, c)
+		}
+	}
+	if condition(stored, "Custom") == nil {
+		t.Error("unrelated condition was dropped")
+	}
+	if stored.GetStatus().GetActorUid() != "" {
+		t.Errorf("client-supplied actorUid stored: %q", stored.GetStatus().GetActorUid())
+	}
+}
+
+// countingTaskStore counts GetTask calls.
+type countingTaskStore struct {
+	*memory.MemoryStore
+	gets atomic.Int64
+}
+
+func (c *countingTaskStore) GetTask(ctx context.Context, atespace, name string) (*v1alpha1.Task, error) {
+	c.gets.Add(1)
+	return c.MemoryStore.GetTask(ctx, atespace, name)
+}
+
+// N2: the hook following a write through UsageStore() skips its budget
+// pre-check (the commit observer already ran it); a hook for another
+// snapshot still checks.
+func TestFinOps_HookSkipsCheckAlreadyDoneByObserver(t *testing.T) {
+	ts := &countingTaskStore{MemoryStore: memory.NewStore()}
+	srv := server.NewServer(ts, server.Options{Usage: &server.UsageOptions{Store: usage.NewMemoryStore(), Labels: server.NewLabelCache(ts, 0)}})
+	ctx := context.Background()
+	if err := ts.SaveTask(ctx, &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "t1"}, Spec: &v1alpha1.TaskSpec{}, Status: &v1alpha1.TaskStatus{Phase: "Running"}}); err != nil {
+		t.Fatal(err)
+	}
+	key := usage.Key{Atespace: "default", Name: "t1"}
+	var snap *usage.TaskUsage
+	if err := srv.UsageStore().Update(ctx, key, func(u *usage.TaskUsage) error {
+		u.CPUSeconds++
+		snap = u
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterObserver := ts.gets.Load()
+	if afterObserver == 0 {
+		t.Fatal("commit observer did not check the budget")
+	}
+	srv.UsageHooks().OnDelta(ctx, key, usage.Delta{}, usage.Cost{}, snap)
+	if n := ts.gets.Load(); n != afterObserver {
+		t.Errorf("hook re-checked an observed write: GetTask %d -> %d", afterObserver, n)
+	}
+	srv.UsageHooks().OnDelta(ctx, key, usage.Delta{}, usage.Cost{}, usage.NewTaskUsage())
+	if n := ts.gets.Load(); n == afterObserver {
+		t.Error("hook for an unobserved snapshot skipped its check")
+	}
+}
