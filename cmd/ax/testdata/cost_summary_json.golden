@@ -1,0 +1,66 @@
+{
+  "by": "agent",
+  "atespace": "default",
+  "source": "tasks",
+  "currency": "USD",
+  "groups": [
+    {
+      "group": "coder",
+      "tasks": 2,
+      "activeSeconds": 9012,
+      "idleSeconds": 960,
+      "tokens": 548600,
+      "cost": {
+        "compute": 0.2287,
+        "idle": 0.0151,
+        "tokens": 1.1112,
+        "storage": 0.0046,
+        "total": 1.3445,
+        "tokensPartiallyUnpriced": true
+      }
+    },
+    {
+      "group": "reviewer",
+      "tasks": 1,
+      "activeSeconds": 80,
+      "idleSeconds": 0,
+      "tokens": 9400,
+      "cost": {
+        "compute": 0.0003,
+        "idle": 0,
+        "tokens": 0.0039,
+        "storage": 0,
+        "total": 0.0042
+      }
+    },
+    {
+      "group": "<none>",
+      "tasks": 1,
+      "activeSeconds": 0,
+      "idleSeconds": 0,
+      "tokens": 0,
+      "cost": {
+        "compute": 0,
+        "idle": 0,
+        "tokens": 0,
+        "storage": 0,
+        "total": 0
+      }
+    }
+  ],
+  "total": {
+    "group": "TOTAL",
+    "tasks": 4,
+    "activeSeconds": 9092,
+    "idleSeconds": 960,
+    "tokens": 558000,
+    "cost": {
+      "compute": 0.229,
+      "idle": 0.0151,
+      "tokens": 1.1151,
+      "storage": 0.0046,
+      "total": 1.3487,
+      "tokensPartiallyUnpriced": true
+    }
+  }
+}

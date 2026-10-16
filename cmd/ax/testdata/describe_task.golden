@@ -1,0 +1,39 @@
+Name:         coder-acme
+Atespace:     default
+Labels:       agent=coder
+              customer=acme
+Phase:        Running
+Actor:        coder-acme
+Worker IP:    10.20.3.67
+Image:        us-docker.pkg.dev/demo/ax-task-runner:finops
+Command:      [python3 /opt/finops-agent/main.py]
+Budget:
+  Active Deadline:  30m0s
+  Max Tokens:       100,000
+  Max Cost:         $1.00
+  Warn At:          80%
+  On Exceeded:      WARN
+Usage:
+  Active:           25m12s
+  Idle:             6m0s
+  CPU:              812.35 s
+  Memory:           1520.50 GiB·s
+  Workspace:        12.3 MiB
+  Updated:          2026-10-16T11:59:30Z
+  Tokens:
+    MODEL                    INPUT    OUTPUT   CACHE-READ   CACHE-WRITE   REASONING
+    gemini-3-flash-preview   85,000   3,000    20,000       1,000         1,200
+    some-unpriced-model      500      100      0            0             0
+Cost:
+  Compute:          $0.0187
+    of which idle:  $0.0031
+  Tokens:           $0.0912 *
+  Storage:          $0.0001
+  Total:            $0.1100
+  * tokens partially unpriced: some models are not on the rate card; their tokens are counted but not priced
+
+Conditions:
+  TYPE           STATUS  REASON                 MESSAGE
+  Ready          True    ActorRunning           
+  BudgetWarning  True    ActiveDeadlineWarning  active 25m12s of 30m0s (84%); tokens 88,600 of 100,000 (88%)
+  Idle           True    LowCPU                 cpu below 0.02 vCPU for 6m0s; idle 6m0s total, idle cost $0.0031

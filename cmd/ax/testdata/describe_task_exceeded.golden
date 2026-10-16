@@ -1,0 +1,31 @@
+Name:         coder-globex
+Atespace:     default
+Labels:       agent=coder
+              customer=globex
+Phase:        Suspended
+Actor:        coder-globex
+Worker IP:    
+Budget:
+  Max Cost:         $1.00
+  Warn At:          server default
+  On Exceeded:      WARN
+Usage:
+  Active:           2h5m0s
+  Idle:             10m0s
+  CPU:              5400.00 s
+  Memory:           9000.00 GiB·s
+  Workspace:        3.0 GiB
+  Tokens:
+    MODEL            INPUT     OUTPUT   CACHE-READ   CACHE-WRITE   REASONING
+    gemini-2.5-pro   400,000   60,000   100,000      0             0
+Cost:
+  Compute:          $0.2100
+    of which idle:  $0.0120
+  Tokens:           $1.02
+  Storage:          $0.0045
+  Total:            $1.23
+
+Conditions:
+  TYPE            STATUS  REASON           MESSAGE
+  BudgetWarning   False   BudgetExceeded   cost $1.23 of $1.00 (123%)
+  BudgetExceeded  True    MaxCostExceeded  cost $1.23 of $1.00 (123%)

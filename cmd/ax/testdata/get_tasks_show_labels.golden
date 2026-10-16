@@ -1,0 +1,5 @@
+NAME            AGENT      ATESPACE   PHASE       ACTOR           WORKER-IP    AGE   COST      LABELS
+coder-acme      coder      default    Running     coder-acme      10.20.3.67   40m   $0.1100   agent=coder,customer=acme
+coder-globex    coder      default    Suspended   coder-globex    <none>       3h    $1.23     agent=coder,customer=globex
+reviewer-acme   reviewer   default    Running     reviewer-acme   10.20.3.68   1m    $0.0042   agent=reviewer,customer=acme
+unlabeled       -          default    Pending     <none>          <none>       1d    -         <none>

@@ -1,0 +1,5 @@
+GROUP    TASKS   ACTIVE     IDLE    TOKENS    COMPUTE   TOKENS$    STORAGE   TOTAL
+globex   1       2h5m0s     10m0s   460,000   $0.2100   $1.02      $0.0045   $1.23
+acme     1       25m12s     6m0s    88,600    $0.0187   $0.0912*   $0.0001   $0.1100
+TOTAL    2       2h30m12s   16m0s   548,600   $0.2287   $1.11*     $0.0046   $1.34
+* tokens partially unpriced: some models are not on the rate card; their tokens are counted but not priced

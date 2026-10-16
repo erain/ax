@@ -1,0 +1,3 @@
+NAME            AGENT      ATESPACE   PHASE     ACTOR           WORKER-IP    AGE   COST
+coder-acme      coder      default    Running   coder-acme      10.20.3.67   40m   $0.1100
+reviewer-acme   reviewer   default    Running   reviewer-acme   10.20.3.68   1m    $0.0042

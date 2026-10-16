@@ -95,8 +95,8 @@ This deploys Redis, then builds and deploys the control plane images with `ko`. 
 ```bash
 ax apply -f examples/task.yaml       # Task + Workspace + Model in one file
 ax get tasks
-# NAME      AGENT   ATESPACE   PHASE     ACTOR           WORKER-IP    AGE
-# task123   -       default    Running   task123         10.20.3.67   1m
+# NAME      AGENT   ATESPACE   PHASE     ACTOR           WORKER-IP    AGE   COST
+# task123   -       default    Running   task123         10.20.3.67   1m    $0.0042
 
 ax watch task task123                # stream phase and condition changes live
 ax ssh task123 -- ls -la /workspace  # poke around inside the sandbox
@@ -115,6 +115,7 @@ Want to see the whole lifecycle end to end? Run [`./demo.sh`](demo.sh). It appli
 | [Sandbox](docs/sandbox.md) | See what the runner does on boot and what your command can rely on: metadata server, guest services, environment. |
 | [Runners](docs/runner.md) | Understand the contract between the control plane and the task container, and build your own runner image to replace the default. |
 | [Networking](docs/networking.md) | Reach a running task through the atenet router from the cluster, your laptop, or a gRPC client. |
+| [CLI: usage and cost](docs/cli.md) | Read task usage and cost with `ax get tasks`, `ax describe task`, and `ax cost summary`. |
 | [Architecture](DESIGN.md) | Understand how the control plane fits together, plus the [API reference](DESIGN.md#api-reference). |
 | [Development](docs/development.md) | Build, test, and ship changes to AX itself. |
 | [Roadmap](docs/roadmap.md) | See planned milestones across core specs, actor architecture, agentic environments, and governance. |
@@ -133,12 +134,17 @@ ax apply -f examples/task.yaml
 ax get tasks                          # list
 ax get tasks -a my-atespace           # list in another atespace
 ax get tasks -l agent=coder,customer=acme  # filter by labels (AGENT column = label "agent")
+ax get tasks --show-labels            # add a LABELS column
 ax get task task123                   # full spec + live status as YAML
-ax describe task task123              # human-readable detail
+ax describe task task123              # human-readable detail: labels, budget, usage, cost, conditions
 ax watch task task123                 # stream status and condition transitions
 ax suspend task task123               # checkpoint actor state and pause
 ax resume task task123                # resume a suspended task
 ax delete task task123
+
+# Usage and cost (see docs/cli.md)
+ax cost summary                       # roll up by the "agent" label
+ax cost summary --by customer -l agent=coder -o json
 
 # Shell into the running sandbox
 ax ssh task123                        # interactive shell (task needs spec.debug: true)
