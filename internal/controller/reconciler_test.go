@@ -51,6 +51,7 @@ type mockControlServer struct {
 	getActorFunc      func(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	createAtespaceErr error
 	createActorErr    error
+	createTmplErr     error
 	resumeActorErr    error
 	crashedActor      string
 	revertedActors    []string
@@ -73,6 +74,9 @@ func (m *mockControlServer) GetActorTemplate(_ context.Context, req *ateapipb.Ge
 }
 
 func (m *mockControlServer) CreateActorTemplate(_ context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+	if m.createTmplErr != nil {
+		return nil, m.createTmplErr
+	}
 	if m.actorTemplates == nil {
 		m.actorTemplates = make(map[string]bool)
 	}
@@ -946,5 +950,55 @@ func TestTaskReconciler_DefaultImage(t *testing.T) {
 	}
 	if got, want := reconciled.GetStatus().GetActorUid(), mockActorUID("no-image"); got != want {
 		t.Errorf("actorUid = %q, want %q (from EnsureActor)", got, want)
+	}
+}
+
+// An ActorTemplate that Substrate rejects as invalid (e.g. an image that is
+// not pinned by digest, required since Substrate v0.5.0) fails the task with
+// that reason instead of falling back to the default template.
+func TestTaskReconciler_InvalidTemplateFailsTask(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+	mockSrv := &mockControlServer{
+		createTmplErr: status.Error(codes.InvalidArgument, "actor_template.containers[0].image: must be pinned by digest"),
+	}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", v1alpha1.DefaultSystemNamespace)
+	reconciler.SecretResolver = noSecrets
+	task := &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "tag-image", Atespace: "default"},
+		Spec:     &v1alpha1.TaskSpec{Image: "registry.example.com/runner:latest"},
+		Status:   &v1alpha1.TaskStatus{Phase: "Suspended"},
+	}
+	reconciled, err := reconciler.Reconcile(context.Background(), task)
+	if err == nil || !strings.Contains(err.Error(), "pinned by digest") {
+		t.Fatalf("Reconcile error = %v, want the template's InvalidArgument", err)
+	}
+	if got := reconciled.GetStatus().GetPhase(); got != "Failed" {
+		t.Errorf("phase = %q, want Failed", got)
+	}
+	var reason string
+	for _, c := range reconciled.GetStatus().GetConditions() {
+		if c.GetType() == "Ready" {
+			reason = c.GetReason()
+		}
+	}
+	if reason != "ActorTemplateInvalid" {
+		t.Errorf("Ready reason = %q, want ActorTemplateInvalid", reason)
+	}
+	if len(mockSrv.createdActors) != 0 {
+		t.Errorf("actors created = %v, want none", mockSrv.createdActors)
 	}
 }
