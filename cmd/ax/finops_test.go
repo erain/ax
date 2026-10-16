@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -32,9 +33,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gopkg.in/yaml.v3"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite cmd/ax/testdata/*.golden")
@@ -148,7 +151,7 @@ func finopsFixtureTasks() []*v1alpha1.Task {
 					{Type: v1alpha1.ConditionBudgetWarning, Status: "True", Reason: "ActiveDeadlineWarning", LastTransitionTime: ltt,
 						Message: "active 25m12s of 30m0s (84%); tokens 88,600 of 100,000 (88%)"},
 					{Type: v1alpha1.ConditionIdle, Status: "True", Reason: "LowCPU", LastTransitionTime: ltt,
-						Message: "cpu below 0.02 vCPU for 6m0s; idle 6m0s total, idle cost $0.0031"},
+						Message: "cpu below 0.02 vCPU and no new tokens for 6m0s; idle 6m0s total, idle cost $0.0031"},
 				},
 			},
 		},
@@ -260,6 +263,11 @@ func TestGolden(t *testing.T) {
 		{"get_tasks", "default", func(a, s string) error { return runGet(a, s, []string{"tasks"}) }},
 		{"get_tasks_show_labels", "default", func(a, s string) error { return runGet(a, s, []string{"tasks", "--show-labels"}) }},
 		{"get_tasks_selector", "default", func(a, s string) error { return runGet(a, s, []string{"tasks", "-l", "customer=acme"}) }},
+		{"get_task_yaml", "default", func(a, s string) error { return runGet(a, s, []string{"task", "coder-acme"}) }},
+		{"get_task_json", "default", func(a, s string) error { return runGet(a, s, []string{"task", "coder-acme", "-o", "json"}) }},
+		{"get_tasks_json", "default", func(a, s string) error {
+			return runGet(a, s, []string{"tasks", "-l", "customer=globex", "--output=json"})
+		}},
 		{"describe_task", "default", func(a, s string) error { return runDescribe(a, s, []string{"task", "coder-acme"}) }},
 		{"describe_task_exceeded", "default", func(a, s string) error { return runDescribe(a, s, []string{"task", "coder-globex"}) }},
 		{"describe_task_no_usage", "default", func(a, s string) error { return runDescribe(a, s, []string{"task", "unlabeled"}) }},
@@ -283,6 +291,98 @@ func TestGolden(t *testing.T) {
 			checkGolden(t, tc.golden, got)
 		})
 	}
+}
+
+// T19: `ax get task -o json` prints protojson; -o yaml is the unchanged
+// default YAML.
+func TestGetTaskOutputFormats(t *testing.T) {
+	fixtures := finopsFixtureTasks()
+	_, addr := startFakeTaskServer(t, fixtures)
+	get := func(args ...string) string {
+		t.Helper()
+		out, err := captureStdout(t, func() error { return runGet(addr, "default", args) })
+		if err != nil {
+			t.Fatalf("runGet(%q): %v\n%s", args, err, out)
+		}
+		return out
+	}
+	def := get("task", "coder-acme")
+	for _, args := range [][]string{{"task", "coder-acme", "-o", "yaml"}, {"task", "coder-acme", "--output=yaml"}, {"-o=yaml", "task", "coder-acme"}} {
+		if got := get(args...); got != def {
+			t.Errorf("runGet(%q) differs from the default YAML:\n%s\n--- default ---\n%s", args, got, def)
+		}
+	}
+
+	out := get("task", "coder-acme", "-o", "json")
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("-o json output is not valid JSON:\n%s", out)
+	}
+	got := &v1alpha1.Task{}
+	if err := protojson.Unmarshal([]byte(out), got); err != nil {
+		t.Fatalf("protojson.Unmarshal: %v", err)
+	}
+	if !proto.Equal(got, fixtures[0]) {
+		t.Errorf("JSON round trip = %v, want %v", got, fixtures[0])
+	}
+	// Same field names as the YAML.
+	var asJSON map[string]any
+	var asYAML map[string]any
+	if err := json.Unmarshal([]byte(out), &asJSON); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal([]byte(def), &asYAML); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"metadata", "spec", "status"} {
+		if _, ok := asJSON[k]; !ok {
+			t.Errorf("JSON lacks %q", k)
+		}
+		jm, _ := asJSON[k].(map[string]any)
+		ym, _ := asYAML[k].(map[string]any)
+		if len(jm) != len(ym) {
+			t.Errorf("%s: JSON keys %v, YAML keys %v", k, keys(jm), keys(ym))
+		}
+		for kk := range ym {
+			if _, ok := jm[kk]; !ok {
+				t.Errorf("%s.%s in YAML but not in JSON", k, kk)
+			}
+		}
+	}
+
+	// A list in JSON is the ListTasksResponse.
+	want := 0
+	for _, f := range fixtures {
+		if f.GetMetadata().GetAtespace() == "default" {
+			want++
+		}
+	}
+	var list v1alpha1.ListTasksResponse
+	if err := protojson.Unmarshal([]byte(get("tasks", "-o", "json")), &list); err != nil || len(list.Tasks) != want {
+		t.Errorf("tasks -o json: %d tasks, want %d, err %v", len(list.Tasks), want, err)
+	}
+
+	for _, tc := range []struct {
+		args    []string
+		wantErr string
+	}{
+		{[]string{"task", "coder-acme", "-o", "xml"}, "unsupported output format"},
+		{[]string{"task", "coder-acme", "-o", "table"}, "only supported when listing"},
+		{[]string{"tasks", "--show-labels", "-o", "json"}, "--show-labels is only supported with table output"},
+		{[]string{"task", "coder-acme", "-o"}, "requires a value"},
+	} {
+		if err := runGet(addr, "default", tc.args); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("runGet(%q) = %v, want error containing %q", tc.args, err, tc.wantErr)
+		}
+	}
+}
+
+func keys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestCostSummaryJSONMatchesTable(t *testing.T) {

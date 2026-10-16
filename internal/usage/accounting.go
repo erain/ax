@@ -159,7 +159,8 @@ const maxEpochs = 8
 // at cfg.SampleGapCap and the interval split at UTC midnight; the cpu
 // increment is spread over the same interval. An interval is idle when the
 // command has exited, or for the part after a low-cpu streak (rate below
-// cfg.IdleCPUThreshold) has lasted cfg.IdleAfter. Active time is derived
+// cfg.IdleCPUThreshold) has lasted cfg.IdleAfter; the streak never starts
+// before State.LastTokenActivity (see ApplyRunnerReport). Active time is derived
 // from epochs and state events (see reconcileActive); the sample extends its
 // epoch's activation interval.
 //
@@ -226,6 +227,11 @@ func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta 
 			if rate < cfg.IdleCPUThreshold {
 				if st.IdleStreakStart.IsZero() {
 					st.IdleStreakStart = prev.Time
+				}
+				// New tokens are activity: the streak starts no earlier
+				// than the last token-bearing runner report.
+				if st.IdleStreakStart.Before(st.LastTokenActivity) {
+					st.IdleStreakStart = st.LastTokenActivity
 				}
 				idle, idleFrom = true, st.IdleStreakStart.Add(cfg.IdleAfter)
 			} else {
@@ -658,6 +664,12 @@ func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
 // the report time. Reports older than the last applied one are ignored (only
 // LastPullTime advances).
 //
+// A report with a non-zero token delta is activity (an agent waiting on an
+// LLM call is below the idle cpu threshold): State.LastTokenActivity becomes
+// the report time and a running low-cpu streak restarts there. Idle already
+// accounted before the report is kept (deltas are never negative); only
+// later sample intervals see the restarted streak.
+//
 // Persist the record after every Apply* call, even when the returned Delta is
 // zero: the call may still have advanced accounting state (last sample per
 // epoch, open interval, actor uid, runner session/baseline, LastPullTime,
@@ -689,6 +701,7 @@ func (u *TaskUsage) ApplyRunnerReport(r RunnerReport, now time.Time) Delta {
 	}
 
 	date := DateOf(t)
+	newTokens := false
 	next := make(map[string]RunnerTokens, len(base)+len(r.Tokens))
 	for m, v := range base {
 		next[m] = v
@@ -706,6 +719,7 @@ func (u *TaskUsage) ApplyRunnerReport(r RunnerReport, now time.Time) Delta {
 			Reasoning:  cur.Reasoning - prev.Reasoning,
 		}
 		if !tc.IsZero() {
+			newTokens = true
 			dd := d.day(date)
 			if dd.Tokens == nil {
 				dd.Tokens = map[string]TokenCounts{}
@@ -726,6 +740,10 @@ func (u *TaskUsage) ApplyRunnerReport(r RunnerReport, now time.Time) Delta {
 		st.RunnerTokens = nil
 	}
 
+	if newTokens {
+		u.noteTokenActivity(t)
+	}
+
 	u.accrueStorage(&d, t)
 	u.WorkspaceBytes = r.WorkspaceBytes
 
@@ -740,4 +758,17 @@ func (u *TaskUsage) ApplyRunnerReport(r RunnerReport, now time.Time) Delta {
 	u.touch(t)
 	u.commit(&d)
 	return d
+}
+
+// noteTokenActivity records token activity at t and restarts a running
+// low-cpu streak there, so the streak never starts before the last
+// token-bearing report. Nothing already accounted changes.
+func (u *TaskUsage) noteTokenActivity(t time.Time) {
+	st := &u.State
+	if t.After(st.LastTokenActivity) {
+		st.LastTokenActivity = t
+	}
+	if !st.IdleStreakStart.IsZero() && st.IdleStreakStart.Before(st.LastTokenActivity) {
+		st.IdleStreakStart = st.LastTokenActivity
+	}
 }

@@ -4,6 +4,10 @@ ax-server records the usage of every task (compute from Agent Substrate, model t
 harness through the runner) and prices it with a rate card. The result is part of the task itself,
 under `status.usage`, so `ax get task <name>` (YAML) already shows it. The commands below format it.
 
+`ax get task <name> -o json` prints the same object as JSON (protojson: same field names as the
+YAML; 64-bit integers such as `maxTokens` or token counts are JSON strings). `-o yaml` is the default.
+`ax get tasks -o json|yaml` prints the list (`{"tasks": [...]}`) instead of the table.
+
 Money is printed with 4 decimals below $1 (`$0.0123`) and 2 decimals from $1 up (`$1.23`).
 
 ## `ax get tasks`
@@ -73,7 +77,7 @@ Conditions:
   TYPE           STATUS  REASON                 MESSAGE
   Ready          True    ActorRunning           
   BudgetWarning  True    ActiveDeadlineWarning  active 25m12s of 30m0s (84%); tokens 88,600 of 100,000 (88%)
-  Idle           True    LowCPU                 cpu below 0.02 vCPU for 6m0s; idle 6m0s total, idle cost $0.0031
+  Idle           True    LowCPU                 cpu below 0.02 vCPU and no new tokens for 6m0s; idle 6m0s total, idle cost $0.0031
 ```
 
 ## `ax cost summary`

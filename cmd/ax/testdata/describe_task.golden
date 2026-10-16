@@ -36,4 +36,4 @@ Conditions:
   TYPE           STATUS  REASON                 MESSAGE
   Ready          True    ActorRunning           
   BudgetWarning  True    ActiveDeadlineWarning  active 25m12s of 30m0s (84%); tokens 88,600 of 100,000 (88%)
-  Idle           True    LowCPU                 cpu below 0.02 vCPU for 6m0s; idle 6m0s total, idle cost $0.0031
+  Idle           True    LowCPU                 cpu below 0.02 vCPU and no new tokens for 6m0s; idle 6m0s total, idle cost $0.0031

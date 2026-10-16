@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 )
@@ -211,9 +213,10 @@ Usage:
 
 Available Commands:
   apply -f <file>         Apply resources (tasks, workspaces, models) from a file or stdin
-  get tasks [-l k=v,...] [--show-labels]
+  get tasks [-l k=v,...] [--show-labels] [-o table|yaml|json]
                           List tasks (with COST), optionally filtered by label selector
-  get task <name>         Get a specific task
+  get task <name> [-o yaml|json]
+                          Get a specific task (default YAML)
   get workspaces          List workspaces
   get workspace <name>    Get a specific workspace
   get models              List models
@@ -380,15 +383,36 @@ type getArgs struct {
 	positional []string
 	selector   string
 	showLabels bool
+	// output is the -o/--output format ("" = default: a table for lists,
+	// YAML for a single resource).
+	output string
 }
 
-// parseGetArgs separates the flags of `ax get` (-l/--selector and
-// --show-labels, kubectl style) from its positional arguments.
+// Output formats of `ax get`.
+const (
+	getOutputTable = "table"
+	getOutputYAML  = "yaml"
+	getOutputJSON  = "json"
+)
+
+// parseGetArgs separates the flags of `ax get` (-l/--selector,
+// --show-labels and -o/--output, kubectl style) from its positional
+// arguments.
 func parseGetArgs(args []string) (getArgs, error) {
 	var g getArgs
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "-o" || arg == "--output":
+			if i+1 >= len(args) {
+				return getArgs{}, fmt.Errorf("flag %s requires a value (yaml or json)", arg)
+			}
+			g.output = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--output="):
+			g.output = strings.TrimPrefix(arg, "--output=")
+		case strings.HasPrefix(arg, "-o="):
+			g.output = strings.TrimPrefix(arg, "-o=")
 		case arg == "-l" || arg == "--selector":
 			if i+1 >= len(args) {
 				return getArgs{}, fmt.Errorf("flag %s requires a value (e.g. %s agent=foo,customer=bar)", arg, arg)
@@ -405,7 +429,43 @@ func parseGetArgs(args []string) (getArgs, error) {
 			g.positional = append(g.positional, arg)
 		}
 	}
+	switch g.output {
+	case "", getOutputTable, getOutputYAML, getOutputJSON:
+	default:
+		return getArgs{}, fmt.Errorf("unsupported output format %q (want table, yaml or json)", g.output)
+	}
 	return g, nil
+}
+
+// writeResource prints one resource (or a List*Response) in the -o format:
+// JSON is protojson (same field names as the YAML, 64-bit integers as
+// strings), YAML is the default.
+func writeResource(w io.Writer, format string, m proto.Message) error {
+	if format == getOutputJSON {
+		data, err := protojson.Marshal(m)
+		if err != nil {
+			return err
+		}
+		// Re-indent with encoding/json: protojson's own whitespace is
+		// deliberately unstable.
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, data, "", "  "); err != nil {
+			return err
+		}
+		buf.WriteByte('\n')
+		_, err = w.Write(buf.Bytes())
+		return err
+	}
+	return yaml.NewEncoder(w).Encode(m)
+}
+
+// writeList prints a list in the -o format: items under key (e.g. "tasks"),
+// as the List*Response message for JSON and as a YAML mapping for YAML.
+func writeList[T proto.Message](w io.Writer, format string, resp proto.Message, key string, items []T) error {
+	if format == getOutputJSON {
+		return writeResource(w, format, resp)
+	}
+	return yaml.NewEncoder(w).Encode(map[string][]T{key: items})
 }
 
 func runGet(serverURL, atespace string, args []string) error {
@@ -430,6 +490,14 @@ func runGet(serverURL, atespace string, args []string) error {
 	if parsed.showLabels && ((resource != "tasks" && resource != "task") || len(args) != 1) {
 		return fmt.Errorf("--show-labels is only supported by 'ax get tasks'")
 	}
+	output := parsed.output
+	if len(args) >= 2 && output == getOutputTable {
+		return fmt.Errorf("-o table is only supported when listing resources")
+	}
+	if parsed.showLabels && output != "" && output != getOutputTable {
+		return fmt.Errorf("--show-labels is only supported with table output")
+	}
+	listAsTable := output == "" || output == getOutputTable
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -445,6 +513,9 @@ func runGet(serverURL, atespace string, args []string) error {
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
 		}
+		if !listAsTable {
+			return writeList(os.Stdout, output, resp, "tasks", resp.Tasks)
+		}
 		return writeTaskTable(os.Stdout, resp.Tasks, taskTableOptions{showLabels: parsed.showLabels, now: nowFunc()})
 	}
 
@@ -455,7 +526,7 @@ func runGet(serverURL, atespace string, args []string) error {
 			return fmt.Errorf("getting task %q: %w", name, err)
 		}
 
-		return yaml.NewEncoder(os.Stdout).Encode(task)
+		return writeResource(os.Stdout, output, task)
 	}
 
 	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
@@ -465,6 +536,9 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		workspaces := resp.Workspaces
+		if !listAsTable {
+			return writeList(os.Stdout, output, resp, "workspaces", workspaces)
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tGIT-REPOS\tMCP-SERVERS")
@@ -500,7 +574,7 @@ func runGet(serverURL, atespace string, args []string) error {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
 		}
 
-		return yaml.NewEncoder(os.Stdout).Encode(ws)
+		return writeResource(os.Stdout, output, ws)
 	}
 
 	if (resource == "models" || resource == "model") && len(args) == 1 {
@@ -510,6 +584,9 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		models := resp.Models
+		if !listAsTable {
+			return writeList(os.Stdout, output, resp, "models", models)
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tPROVIDER\tMODEL")
@@ -543,7 +620,7 @@ func runGet(serverURL, atespace string, args []string) error {
 			return fmt.Errorf("getting model %q: %w", name, err)
 		}
 
-		return yaml.NewEncoder(os.Stdout).Encode(m)
+		return writeResource(os.Stdout, output, m)
 	}
 
 	return fmt.Errorf("unknown resource %q", resource)

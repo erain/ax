@@ -401,6 +401,11 @@ func TestParseGetArgs(t *testing.T) {
 		{args: []string{"tasks", "-l=agent=foo"}, wantPos: []string{"tasks"}, wantSelector: "agent=foo"},
 		{args: []string{"task", "name"}, wantPos: []string{"task", "name"}},
 		{args: []string{"tasks", "-l"}, wantErr: true},
+		{args: []string{"task", "name", "-o", "json"}, wantPos: []string{"task", "name"}},
+		{args: []string{"task", "name", "--output", "yaml"}, wantPos: []string{"task", "name"}},
+		{args: []string{"task", "name", "-o=json"}, wantPos: []string{"task", "name"}},
+		{args: []string{"task", "name", "-o", "xml"}, wantErr: true},
+		{args: []string{"task", "name", "-o"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		parsed, err := parseGetArgs(tt.args)

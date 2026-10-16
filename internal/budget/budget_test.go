@@ -373,7 +373,7 @@ func TestIdle_SetAndCleared(t *testing.T) {
 	if c.GetStatus() != StatusTrue || c.GetReason() != ReasonLowCPU || s.updates != 1 {
 		t.Fatalf("idle: Idle = %v updates=%d", c, s.updates)
 	}
-	if want := "cpu below 0.02 vCPU for 6m0s; idle 1m0s total, idle cost $0.0012"; c.GetMessage() != want {
+	if want := "cpu below 0.02 vCPU and no new tokens for 6m0s; idle 1m0s total, idle cost $0.0012"; c.GetMessage() != want {
 		t.Errorf("idle message = %q, want %q", c.GetMessage(), want)
 	}
 	// Still idle a minute later: message refreshes, no new update, time kept.
@@ -422,6 +422,87 @@ func TestIdle_SetAndCleared(t *testing.T) {
 	idleUsage(t, short, 0, 3, 0)
 	if res := Evaluate(newTask(nil, "Running"), short, Config{IdleAfter: 2 * time.Minute}, t0); res.Idle.GetStatus() != StatusTrue {
 		t.Errorf("IdleAfter=2m: Idle = %v", res.Idle)
+	}
+}
+
+// T19 acceptance 1: low cpu for 10 minutes with a token report every 2
+// minutes is not idle; once token reports stop, Idle turns True after
+// idle.after (counted from the last token report).
+func TestIdle_TokenReportsKeepTaskActive(t *testing.T) {
+	s := &sim{t: t, task: newTask(nil, "Running")}
+	u := usage.NewTaskUsage()
+	var input int64
+	report := func(min float64, newTokens bool) {
+		if newTokens {
+			input += 1000
+		}
+		rt := t0.Add(time.Duration(min * float64(time.Minute)))
+		u.ApplyRunnerReport(usage.RunnerReport{Session: "s1", ReportTime: rt,
+			Tokens: map[string]usage.RunnerTokens{"gemini-3-flash-preview": {Input: input, Output: input / 4}}}, rt)
+	}
+	for m := 0; m <= 10; m++ {
+		idleUsage(t, u, m, 1, 0.1) // 0.0017 vCPU
+		if m%2 == 0 && m < 10 {
+			report(float64(m)+0.5, true)
+		}
+		res := s.step(u, t0.Add(time.Duration(m)*time.Minute))
+		if c := cond(t, s.task.Status.Conditions, v1alpha1.ConditionIdle); c != nil || res.Idle.GetStatus() != StatusFalse {
+			t.Fatalf("minute %d: Idle = %v (desired %v), want absent", m, c, res.Idle)
+		}
+	}
+	if u.IdleSeconds != 0 || IdleStreak(u) >= 2*time.Minute {
+		t.Fatalf("after 10m with token reports: IdleSeconds = %v, IdleStreak = %v", u.IdleSeconds, IdleStreak(u))
+	}
+
+	// Reports keep coming but bring no new tokens: the last token activity
+	// stays at 8m30s, so Idle turns True at 13m30s (first sample at 14m).
+	for m := 11; m <= 13; m++ {
+		idleUsage(t, u, m, 1, 0.1)
+		report(float64(m)+0.5, false)
+		s.step(u, t0.Add(time.Duration(m)*time.Minute))
+		if c := cond(t, s.task.Status.Conditions, v1alpha1.ConditionIdle); c != nil {
+			t.Fatalf("minute %d: Idle = %v, want absent (streak %v)", m, c, IdleStreak(u))
+		}
+	}
+	idleUsage(t, u, 14, 1, 0.1)
+	s.step(u, t0.Add(14*time.Minute))
+	c := cond(t, s.task.Status.Conditions, v1alpha1.ConditionIdle)
+	if c.GetStatus() != StatusTrue || c.GetReason() != ReasonLowCPU || s.updates != 1 {
+		t.Fatalf("after token reports stopped: Idle = %v updates=%d", c, s.updates)
+	}
+	if got := IdleStreak(u); got != 5*time.Minute+30*time.Second {
+		t.Errorf("IdleStreak = %v, want 5m30s", got)
+	}
+	// Condition and accounting agree: idle accrues from 13m30s.
+	if u.IdleSeconds != 30 {
+		t.Errorf("IdleSeconds = %v, want 30", u.IdleSeconds)
+	}
+	// New tokens again: the streak restarts, Idle False (Active).
+	report(14.5, true)
+	idleUsage(t, u, 15, 1, 0.1)
+	s.step(u, t0.Add(15*time.Minute))
+	if c := cond(t, s.task.Status.Conditions, v1alpha1.ConditionIdle); c.GetStatus() != StatusFalse || c.GetReason() != ReasonActive {
+		t.Fatalf("new tokens: Idle = %v", c)
+	}
+}
+
+// IdleStreak never counts from before the last token activity, even for a
+// record whose streak start predates it.
+func TestIdleStreak_FromLastTokenActivity(t *testing.T) {
+	u := usage.NewTaskUsage()
+	u.State.CurrentEpoch = 1
+	u.State.LastSample = map[int64]usage.SamplePoint{1: {Time: t0.Add(10 * time.Minute)}}
+	u.State.IdleStreakStart = t0
+	if got := IdleStreak(u); got != 10*time.Minute {
+		t.Fatalf("IdleStreak = %v, want 10m", got)
+	}
+	u.State.LastTokenActivity = t0.Add(7 * time.Minute)
+	if got := IdleStreak(u); got != 3*time.Minute {
+		t.Fatalf("IdleStreak = %v, want 3m", got)
+	}
+	u.State.LastTokenActivity = t0.Add(11 * time.Minute)
+	if got := IdleStreak(u); got != 0 {
+		t.Fatalf("IdleStreak = %v, want 0", got)
 	}
 }
 

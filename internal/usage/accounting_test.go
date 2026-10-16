@@ -234,6 +234,100 @@ func TestAccounting_Idle(t *testing.T) {
 	})
 }
 
+// T19: a runner report with new tokens is activity. An agent waiting on an
+// LLM call is below the idle cpu threshold, so the low-cpu streak restarts at
+// every token-bearing report and never starts before the last one.
+func TestAccounting_TokenReportsAreActivity(t *testing.T) {
+	const m = "gemini-3-flash-preview"
+	cfg := AccountingConfig{}
+	sample := func(u *TaskUsage, sec, cpu float64) Delta {
+		return u.ApplyUsageSample(UsageSample{Time: at(sec), Epoch: 1, CPUSeconds: f64(cpu), WorkingSetBytes: i64(oneGiB)}, cfg)
+	}
+	report := func(u *TaskUsage, sec float64, input int64) Delta {
+		return u.ApplyRunnerReport(RunnerReport{Session: "s", ReportTime: at(sec), Tokens: map[string]RunnerTokens{m: {Input: input, Output: input / 10}}}, at(sec))
+	}
+
+	t.Run("token reports every 2m keep a low-cpu agent active", func(t *testing.T) {
+		u := NewTaskUsage()
+		var input int64
+		// Low cpu (0.001 vCPU) samples every 60s for 10 minutes; a token
+		// report every 2 minutes (30s, 150s, ..., 510s) between samples.
+		for i := 0; i <= 10; i++ {
+			sec := float64(60 * i)
+			if d := sample(u, sec, 0.06*float64(i)); d.Sum().IdleSeconds != 0 {
+				t.Fatalf("sample %vs: idle delta %v, want 0", sec, d.Sum().IdleSeconds)
+			}
+			if i%2 == 0 && i < 10 {
+				input += 100
+				report(u, sec+30, input)
+			}
+		}
+		approx(t, "IdleSeconds (10m with token reports)", u.IdleSeconds, 0)
+		if !u.State.LastTokenActivity.Equal(at(510)) || !u.State.IdleStreakStart.Equal(at(510)) {
+			t.Fatalf("LastTokenActivity = %v, IdleStreakStart = %v, want both %v", u.State.LastTokenActivity, u.State.IdleStreakStart, at(510))
+		}
+		// Token reports stop (a report without new tokens is not activity):
+		// idle starts idle.after past the last token report, at 810s.
+		u.ApplyRunnerReport(RunnerReport{Session: "s", ReportTime: at(630), Tokens: map[string]RunnerTokens{m: {Input: input, Output: input / 10}}}, at(630))
+		for i := 11; i <= 13; i++ {
+			sample(u, float64(60*i), 0.06*float64(i))
+		}
+		approx(t, "IdleSeconds at 780s", u.IdleSeconds, 0)
+		d := sample(u, 840, 0.06*14)
+		approx(t, "idle delta [810s, 840s]", d.Sum().IdleSeconds, 30)
+		sample(u, 900, 0.06*15)
+		approx(t, "IdleSeconds at 900s", u.IdleSeconds, 90)
+	})
+
+	t.Run("late token report does not change accounted idle", func(t *testing.T) {
+		u := NewTaskUsage()
+		applySamples(u, cfg, 1, 0, 10, 0, 0.06) // low 0..600s: idle [300s, 600s]
+		approx(t, "IdleSeconds before report", u.IdleSeconds, 300)
+		before := u.IdleSeconds
+		// A report stamped 540s arrives after the 600s sample.
+		d := report(u, 540, 100)
+		if got := d.Sum().IdleSeconds; got != 0 {
+			t.Fatalf("report idle delta = %v, want 0", got)
+		}
+		if u.IdleSeconds != before {
+			t.Fatalf("IdleSeconds changed by the report: %v -> %v", before, u.IdleSeconds)
+		}
+		if !u.State.IdleStreakStart.Equal(at(540)) {
+			t.Fatalf("IdleStreakStart = %v, want %v (restarted at the report time)", u.State.IdleStreakStart, at(540))
+		}
+		// The streak restarted at 540s: no idle until 840s, then idle again.
+		cpu := 0.6
+		for sec := 660.0; sec <= 900; sec += 60 {
+			cpu += 0.06
+			d := sample(u, sec, cpu)
+			if got := d.Sum().IdleSeconds; got < 0 {
+				t.Fatalf("negative idle delta %v at %vs", got, sec)
+			}
+		}
+		approx(t, "IdleSeconds", u.IdleSeconds, 300+60) // [840s, 900s]
+	})
+
+	t.Run("report between samples starts the streak at the report", func(t *testing.T) {
+		u := NewTaskUsage()
+		cpu := applySamples(u, cfg, 1, 0, 1, 0, 30) // busy [0s, 60s]
+		report(u, 90, 100)
+		// Low from 60s; without tokens the streak would start at 60s.
+		applySamples(u, cfg, 1, 60, 6, cpu, 0)
+		if !u.State.IdleStreakStart.Equal(at(90)) {
+			t.Fatalf("IdleStreakStart = %v, want %v", u.State.IdleStreakStart, at(90))
+		}
+		approx(t, "IdleSeconds", u.IdleSeconds, 420-390) // idle from 90s+5m
+	})
+
+	t.Run("command exited is idle even with new tokens", func(t *testing.T) {
+		u := NewTaskUsage()
+		cpu := applySamples(u, cfg, 1, 0, 1, 0, 30)
+		u.ApplyRunnerReport(RunnerReport{Session: "s", ReportTime: at(90), CommandExited: true, Tokens: map[string]RunnerTokens{m: {Input: 10}}}, at(90))
+		d := sample(u, 120, cpu)
+		approx(t, "IdleSeconds", d.Sum().IdleSeconds, 60)
+	})
+}
+
 // Acceptance 5.
 func TestAccounting_RunnerTokens(t *testing.T) {
 	const m = "gemini-2.5-flash"
