@@ -34,6 +34,7 @@ import (
 	"github.com/google/ax/internal/usage/metrics"
 	"github.com/google/ax/internal/usage/puller"
 	"github.com/google/ax/pkg/apis/v1alpha1"
+	"google.golang.org/protobuf/proto"
 )
 
 // fakeRunner serves GET /usage with a switchable session / exit state.
@@ -404,6 +405,74 @@ func TestCompletion_SuspendFailureRetries(t *testing.T) {
 	}
 	if s, _ := rec.counts(); s != 1 {
 		t.Errorf("suspends = %d, want 1", s)
+	}
+}
+
+// completeViaReport drives a SUSPEND_ON_EXIT task t1 to Completed with a
+// commandExited runner report written straight into the usage store.
+func completeViaReport(t *testing.T, e *finopsEnv, now time.Time) {
+	t.Helper()
+	key := usage.Key{Atespace: "default", Name: "t1"}
+	if err := e.srv.UsageStore().Update(context.Background(), key, func(u *usage.TaskUsage) error {
+		u.ApplyRunnerReport(usage.RunnerReport{Session: "s1", ReportTime: now, CommandExited: true}, now)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.WaitCompletions()
+	if got := e.stored(t, "default", "t1").GetStatus().GetPhase(); got != v1alpha1.PhaseCompleted {
+		t.Fatalf("phase = %s, want Completed", got)
+	}
+}
+
+// SuspendTask on a Completed task is a no-op: no reconcile, the stored task
+// is unchanged and the response keeps phase Completed and Completed=True.
+func TestCompletion_SuspendCompletedIsNoop(t *testing.T) {
+	rec := &completionReconciler{}
+	clock := &fakeClock{now: time.Now()}
+	e := newFinopsEnvWithClock(t, rec, clock.Now)
+	e.saveTask(t, "default", "t1", "Running", withWorker("10.0.0.5"), withOnCompletion(v1alpha1.CompletionPolicy_SUSPEND_ON_EXIT))
+	completeViaReport(t, e, clock.Now())
+	before := e.stored(t, "default", "t1")
+	if s, _ := rec.counts(); s != 1 {
+		t.Fatalf("suspends after completion = %d, want 1", s)
+	}
+
+	clock.Add(time.Minute)
+	resp, err := e.srv.SuspendTask(context.Background(), &v1alpha1.SuspendTaskRequest{Name: "t1"})
+	if err != nil {
+		t.Fatalf("SuspendTask on a Completed task: %v", err)
+	}
+	if got := resp.GetStatus().GetPhase(); got != v1alpha1.PhaseCompleted {
+		t.Errorf("response phase = %s, want Completed", got)
+	}
+	requireCondition(t, resp, server.ConditionCompleted, budget.StatusTrue, server.ReasonSuspendedOnExit)
+	if s, r := rec.counts(); s != 1 || r != 0 {
+		t.Errorf("suspends/resumes = %d/%d, want 1/0 (no reconcile)", s, r)
+	}
+	if after := e.stored(t, "default", "t1"); !proto.Equal(before, after) {
+		t.Errorf("stored task changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// Resuming a Completed task stamps Completed=False/Resumed with the FinOps
+// clock, not the wall clock.
+func TestCompletion_ResumeUsesClock(t *testing.T) {
+	rec := &completionReconciler{workerIP: "10.0.0.5"}
+	start := time.Date(2021, 3, 4, 5, 6, 7, 0, time.UTC)
+	clock := &fakeClock{now: start}
+	e := newFinopsEnvWithClock(t, rec, clock.Now)
+	e.saveTask(t, "default", "t1", "Running", withWorker("10.0.0.5"), withOnCompletion(v1alpha1.CompletionPolicy_SUSPEND_ON_EXIT))
+	completeViaReport(t, e, start)
+
+	clock.Add(time.Hour)
+	if _, err := e.srv.ResumeTask(context.Background(), &v1alpha1.ResumeTaskRequest{Name: "t1"}); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	stored := e.stored(t, "default", "t1")
+	requireCondition(t, stored, server.ConditionCompleted, budget.StatusFalse, server.ReasonResumed)
+	if got, want := condition(stored, server.ConditionCompleted).GetLastTransitionTime().AsTime(), start.Add(time.Hour); !got.Equal(want) {
+		t.Errorf("Completed lastTransitionTime = %v, want %v (FinOps clock)", got, want)
 	}
 }
 

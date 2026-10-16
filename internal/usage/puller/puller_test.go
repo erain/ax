@@ -1098,6 +1098,7 @@ func TestPull_RouterRecheck(t *testing.T) {
 		name      string
 		stored    *v1alpha1.Task // nil = deleted
 		getErr    error
+		usageErr  error  // usage store Get error during the re-check
 		lastState string // usage record's last state event ("" = no record)
 		wantHits  int64
 		wantErr   bool
@@ -1108,6 +1109,7 @@ func TestPull_RouterRecheck(t *testing.T) {
 		{name: "deleted"},
 		{name: "rescheduled", stored: task("t1", PhaseRunning, "10.0.0.7")},
 		{name: "re-read fails", stored: task("t1", PhaseRunning, "10.0.0.9"), getErr: errors.New("redis down"), wantErr: true},
+		{name: "usage read fails", stored: task("t1", PhaseRunning, "10.0.0.9"), usageErr: errors.New("redis down"), wantErr: true},
 		{name: "actor suspending", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "suspending"},
 		{name: "actor suspended", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "suspended"},
 		{name: "actor crashed", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "crashed"},
@@ -1120,9 +1122,13 @@ func TestPull_RouterRecheck(t *testing.T) {
 				tasks.tasks["t1"] = tc.stored
 			}
 			tasks.getErr = tc.getErr
-			store := usage.NewMemoryStore()
+			mem := usage.NewMemoryStore()
 			if tc.lastState != "" {
-				record(t, store, "t1", tc.lastState)
+				record(t, mem, "t1", tc.lastState)
+			}
+			var store usage.Store = mem
+			if tc.usageErr != nil {
+				store = failingGetStore{Store: mem, err: tc.usageErr}
 			}
 			p := New(Options{Tasks: tasks, Store: store, RouterAddr: router.Listener.Addr().String(), Timeout: time.Second, Logger: quietLogger()})
 			err := p.Flush(context.Background(), task("t1", PhaseRunning, "10.0.0.9"))
@@ -1145,6 +1151,16 @@ func TestPull_RouterRecheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+// failingGetStore is a usage store whose Get always fails.
+type failingGetStore struct {
+	usage.Store
+	err error
+}
+
+func (s failingGetStore) Get(context.Context, usage.Key) (*usage.TaskUsage, error) {
+	return nil, s.err
 }
 
 // Direct pod-IP pulls never resume an actor: no re-check (the getter is not

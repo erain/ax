@@ -355,6 +355,11 @@ func (s *Server) SuspendTask(ctx context.Context, req *v1alpha1.SuspendTaskReque
 	if task.Status == nil {
 		task.Status = &v1alpha1.TaskStatus{}
 	}
+	// A Completed task is already suspended (on_completion): suspending it
+	// again is a no-op, so its phase and Completed condition stay as they are.
+	if task.Status.Phase == v1alpha1.PhaseCompleted {
+		return s.withUsage(ctx, task), nil
+	}
 	task.Status.Phase = "Suspended"
 
 	if s.reconciler != nil {
