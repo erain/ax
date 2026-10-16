@@ -15,6 +15,7 @@
 package puller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -853,5 +854,120 @@ func TestPull_StateOnlyChangeIsPersisted(t *testing.T) {
 	}
 	if n := len(hooks.snapshot()); n != 1 {
 		t.Errorf("hook calls = %d, want 1 (zero deltas do not fire hooks)", n)
+	}
+}
+
+func TestSweep_LogsSummaryWithLastError(t *testing.T) {
+	ok := newFakeRunner(t)
+	ok.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	bad := newFakeRunner(t)
+	bad.set(http.StatusInternalServerError, "boom")
+	var buf syncBuffer
+	p := New(Options{
+		Tasks: &staticLister{tasks: []*v1alpha1.Task{
+			task("good", PhaseRunning, ok.ip),
+			task("idle", "Suspended", ok.ip),
+		}},
+		Store: usage.NewMemoryStore(), Port: ok.port, Timeout: time.Second,
+		Logger: slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	p.Sweep(context.Background())
+	if got := buf.String(); !strings.Contains(got, `msg="usage puller sweep" pulled=1 failed=0 applied=1`) {
+		t.Errorf("first sweep log = %q", got)
+	}
+
+	buf.Reset()
+	p2 := New(Options{
+		Tasks: &staticLister{tasks: []*v1alpha1.Task{task("bad", PhaseRunning, bad.ip)}},
+		Store: usage.NewMemoryStore(), Port: bad.port, Timeout: time.Second,
+		Logger: slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	p2.Sweep(context.Background())
+	got := buf.String()
+	for _, want := range []string{`pulled=1 failed=1 applied=0`, `lastErrorTask=default/bad`, `lastErrorWorkerIP=` + bad.ip, `lastError=`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failing sweep log %q lacks %q", got, want)
+		}
+	}
+
+	buf.Reset()
+	p3 := New(Options{Tasks: &staticLister{}, Store: usage.NewMemoryStore(), Logger: slog.New(slog.NewTextHandler(&buf, nil))})
+	p3.Sweep(context.Background())
+	if strings.Contains(buf.String(), "usage puller sweep") {
+		t.Errorf("sweep without pulls logged %q", buf.String())
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer for log capture.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
+}
+
+// With RouterAddr, pulls go to the router with the ate-target-actor header
+// (Substrate v0.5.0 does not expose actor ports on the worker pod IP).
+func TestPull_ViaRouter(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		targets []string
+		paths   []string
+	)
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		targets = append(targets, r.Header.Get(TargetActorHeader))
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = io.WriteString(w, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 7}}))
+	}))
+	defer router.Close()
+
+	store := usage.NewMemoryStore()
+	tk := task("t1", PhaseRunning, "10.0.0.9") // worker IP is never dialed
+	tk.Metadata.Atespace = "team-a"
+	p := New(Options{
+		Tasks:      &staticLister{tasks: []*v1alpha1.Task{tk, task("t2", "Suspended", "10.0.0.9")}},
+		Store:      store,
+		RouterAddr: router.Listener.Addr().String(),
+		Timeout:    time.Second,
+		Logger:     quietLogger(),
+	})
+	p.Sweep(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(targets) != 1 || targets[0] != "team-a/t1" || paths[0] != "GET /usage" {
+		t.Fatalf("router requests = %v %v, want one GET /usage for team-a/t1", paths, targets)
+	}
+	u, err := store.Get(context.Background(), usage.Key{Atespace: "team-a", Name: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Tokens["m"].Input; got != 7 {
+		t.Errorf("input tokens = %d, want 7", got)
+	}
+	// A task without a valid worker IP is still not pulled.
+	if err := p.Flush(context.Background(), task("t3", PhaseRunning, "")); err != nil {
+		t.Errorf("Flush without worker IP = %v, want nil", err)
+	}
+	if len(targets) != 1 {
+		t.Errorf("router requests after Flush = %d, want 1", len(targets))
 	}
 }

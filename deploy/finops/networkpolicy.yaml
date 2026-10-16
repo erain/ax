@@ -17,6 +17,10 @@
 # puller calls the task runner directly (GET http://<workerIP>:<runner-port>/usage),
 # so allow ax-server -> worker pods on the runner port. Policies are additive;
 # Substrate's own policy is left untouched.
+# NOTE (T12b): on Substrate v0.5.0 nothing listens on <workerIP>:80 (actors are
+# reached via the worker's atunnel on :443, through atenet-router), so the
+# deployed ax-server pulls via --usage-router-addr and this policy is only used
+# by the direct mode (--usage-router-addr=""). Kept so that mode stays usable.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -327,8 +327,8 @@ func BuildActorTemplate(atespace, name, image string, envMap map[string]string, 
 			Image:   image,
 			Command: command,
 			Env:     envList,
-			WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet: &ateapipb.HTTPGetAction{
+			WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet: &ateapipb.HttpGetAction{
 					Path: "/readyz",
 					Port: 80,
 				},
@@ -347,7 +347,7 @@ func BuildActorTemplate(atespace, name, image string, envMap map[string]string, 
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-default",
 		},
 	}

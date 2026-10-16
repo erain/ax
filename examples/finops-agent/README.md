@@ -75,6 +75,17 @@ gcloud builds submit --project yiyu-gke-dev --config examples/finops-agent/cloud
 
 This pushes `:finops-<sha>` and `:finops-latest`.
 
+Substrate v0.5.0 only accepts digest-pinned images in ActorTemplates, so the
+task YAMLs here omit `spec.image` and rely on ax-server's
+`--default-task-image`, which `deploy/finops/ax-server-patch.yaml` pins to the
+image digest. After a rebuild, update that flag to the new digest:
+
+```sh
+gcloud artifacts docker images describe \
+  us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner:finops-latest \
+  --format='value(image_summary.digest)'
+```
+
 ## Running on a cluster
 
 1. Store the key where the reconciler looks for it. ax-server reads the Secret

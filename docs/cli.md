@@ -79,10 +79,11 @@ Conditions:
 ## `ax cost summary`
 
 ```
-ax cost summary [--by <label>] [-l k=v,...] [-a <atespace>] [-o table|json]
+ax cost summary [--by <label>] [-l k=v,...] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [-a <atespace>] [-o table|json]
 ```
 
-Rolls up usage and cost by the value of a task label. `--by` defaults to `agent`, and tasks without
+Rolls up usage and cost by the value of a task label over the UTC days `--start` to `--end`
+(inclusive). The default is the 30 days ending today. `--by` defaults to `agent`, and tasks without
 the label are grouped as `<none>`. Groups are sorted by total cost, highest first, followed by a
 `TOTAL` row. `TOKENS` is input + output tokens. `TOKENS$` is the token cost.
 
@@ -118,5 +119,32 @@ $ ax cost summary -o json | jq '.groups[0]'
 }
 ```
 
-The summary currently uses each task's lifetime usage from `ListTasks`. It will move to the
-per-day `ListUsage` API, which adds date ranges and includes deleted tasks.
+The summary reads per-day usage from the `ListUsage` API, so `TASKS` counts the tasks with usage in
+the period, and a `Period:` line follows the table (`start` and `end` in JSON, with `"source": "usage"`).
+Against a server without `ListUsage` (an older server, or one with usage accounting disabled), it falls
+back to each task's lifetime usage from `ListTasks` (`"source": "tasks"`). In that case `--start` and
+`--end` are ignored, with a warning. Deleted tasks are not included, because their usage is deleted with
+them.
+
+## `ax cost export`
+
+```
+ax cost export [--format focus-csv|json] [-l k=v,...] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [-a <atespace>] [-o <file>]
+```
+
+Writes [FOCUS](https://focus.finops.org/) cost and usage rows, with one row per task, UTC day and charge:
+
+- vCPU and memory (`Compute`)
+- tokens per model and token type (`AI and Machine Learning`)
+- workspace storage (`Storage`)
+
+The sum of `BilledCost` equals the tasks' cost totals for the period. The period and `-l` work as
+for `summary`. `--format json` writes the same rows as a JSON array. `-o` writes to a file instead of
+stdout. The column mapping is in [finops-focus.md](finops-focus.md).
+
+```console
+$ ax cost export --start 2026-10-01 -o october.csv
+$ ax cost export -l customer=acme --format json | jq 'group_by(.x_Agent) | map({agent: .[0].x_Agent, cost: (map(.BilledCost) | add)})'
+```
+
+Export needs `ListUsage`. Against an older server it fails.
