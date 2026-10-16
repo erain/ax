@@ -77,8 +77,9 @@ type Config struct {
 	OnCommandExit func(CommandExit)
 	// OTLPAddr is the loopback address of the OTLP/HTTP receiver that counts
 	// GenAI token usage reported by the command. Empty disables the receiver;
-	// a non-loopback address is an error. ax-task-runner defaults it to
-	// DefaultOTLPAddr.
+	// a non-loopback address is an error. If the address cannot be bound, the
+	// receiver is disabled with an error log and the task runs without it.
+	// ax-task-runner defaults it to DefaultOTLPAddr.
 	OTLPAddr string
 	// WorkspaceRoot is the durable volume root. Empty means
 	// DefaultWorkspaceRoot.
@@ -187,16 +188,23 @@ func Run(ctx context.Context, cfg Config) error {
 
 	var otlpEndpoint string
 	if cfg.OTLPAddr != "" {
+		// A non-loopback address is a configuration error. Failing to bind a
+		// valid address (for example because the port is already taken) only
+		// disables token counting over OTLP; the task still runs.
+		if err := checkLoopback(cfg.OTLPAddr); err != nil {
+			_ = metaServer.Stop(context.Background())
+			return fmt.Errorf("OTLP receiver: %w", err)
+		}
 		receiver, err := startOTLPReceiver(cfg.OTLPAddr, usage)
 		if err != nil {
-			_ = metaServer.Stop(context.Background())
-			return err
+			slog.Error("OTLP receiver disabled; token usage can still be reported via the metadata usage endpoint", "addr", cfg.OTLPAddr, "error", err)
+		} else {
+			otlpEndpoint = receiver.endpoint()
+			defer func() {
+				slog.Info("shutting down OTLP receiver")
+				_ = receiver.stop(context.Background())
+			}()
 		}
-		otlpEndpoint = receiver.endpoint()
-		defer func() {
-			slog.Info("shutting down OTLP receiver")
-			_ = receiver.stop(context.Background())
-		}()
 	}
 	_ = os.Setenv("AX_METADATA_URL", metadataURL)
 	for _, e := range cfg.Task.GetSpec().GetEnv() {

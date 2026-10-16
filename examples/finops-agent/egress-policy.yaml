@@ -1,0 +1,30 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Agent Substrate v0.5.0 EgressPolicy letting a task's actor reach the Gemini
+# API. Actors have no egress by default, and the policy is per actor (the
+# actor name is the AX task name), so create one per task after the task
+# exists. Deleting the task deletes the actor and, with it, this policy.
+#
+#   kubectl ate --context <ctx> create egress-policy <task-name> -a <atespace> \
+#     -f examples/finops-agent/egress-policy.yaml
+#
+# tls_passthrough forwards TLS by SNI without decrypting it, so the sandbox
+# validates Google's certificate with the image's public CA roots; no trust
+# bundle is needed. The same rule also lets the sandbox DNS relay resolve the
+# name.
+rules:
+  - tls_passthrough:
+      hostnames: ["generativelanguage.googleapis.com"]
+      ports: {numbers: [443]}

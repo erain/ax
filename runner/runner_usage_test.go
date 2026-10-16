@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -182,5 +183,39 @@ func TestRun_RejectsNonLoopbackOTLPAddr(t *testing.T) {
 	defer cancel()
 	if err := runner.Run(ctx, h.cfg); err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("Run with OTLPAddr %q = %v, want a loopback error", h.cfg.OTLPAddr, err)
+	}
+}
+
+// TestRun_OTLPBindFailureDisablesReceiver checks that a taken OTLP port does not
+// fail the task: the command still runs, without OTLP exporter settings, and
+// the JSON usage endpoint keeps counting.
+func TestRun_OTLPBindFailureDisablesReceiver(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "")
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+
+	h := newHarness(t)
+	outFile := filepath.Join(t.TempDir(), "env.txt")
+	h.cfg.OTLPAddr = busy.Addr().String()
+	h.task.Spec.Command = []string{"sh", "-c", `printf '%s|%s' "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_PROTOCOL" > ` + outFile}
+	if exit := h.runUntilCommandExits(t); exit.Err != nil || exit.ExitCode != 0 {
+		t.Fatalf("command did not run cleanly: %+v", exit)
+	}
+	out, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); got != "|" {
+		t.Errorf("OTLP env = %q, want none injected while the receiver is disabled", got)
+	}
+
+	postUsage(t, h.cfg.MetadataPort, `{"model":"m","inputTokens":3,"outputTokens":1}`)
+	rep := getUsage(t, h.cfg.Port)
+	if got, want := rep.Tokens["m"], (&runner.TokenUsage{Input: 3, Output: 1}); !reflect.DeepEqual(got, want) {
+		t.Errorf("tokens[m] = %+v, want %+v", got, want)
 	}
 }

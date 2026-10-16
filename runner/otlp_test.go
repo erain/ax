@@ -178,6 +178,62 @@ func TestOTLPTraces(t *testing.T) {
 	}
 }
 
+func TestOTLPTraces_AttributeAliases(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs []*commonpb.KeyValue
+		want  *TokenUsage
+	}{
+		{
+			name: "cache_write is the current cache creation name",
+			attrs: []*commonpb.KeyValue{
+				intKV("gen_ai.usage.input_tokens", 100),
+				intKV("gen_ai.usage.output_tokens", 10),
+				intKV("gen_ai.usage.cache_write.input_tokens", 40),
+			},
+			want: &TokenUsage{Input: 100, Output: 10, CacheWrite: 40},
+		},
+		{
+			name: "cache_write wins over cache_creation",
+			attrs: []*commonpb.KeyValue{
+				intKV("gen_ai.usage.input_tokens", 100),
+				intKV("gen_ai.usage.cache_write.input_tokens", 40),
+				intKV("gen_ai.usage.cache_creation.input_tokens", 99),
+			},
+			want: &TokenUsage{Input: 100, CacheWrite: 40},
+		},
+		{
+			name: "deprecated prompt and completion tokens",
+			attrs: []*commonpb.KeyValue{
+				intKV("gen_ai.usage.prompt_tokens", 70),
+				intKV("gen_ai.usage.completion_tokens", 7),
+			},
+			want: &TokenUsage{Input: 70, Output: 7},
+		},
+		{
+			name: "current names win over deprecated ones",
+			attrs: []*commonpb.KeyValue{
+				intKV("gen_ai.usage.input_tokens", 50),
+				intKV("gen_ai.usage.prompt_tokens", 500),
+				intKV("gen_ai.usage.output_tokens", 5),
+				intKV("gen_ai.usage.completion_tokens", 55),
+			},
+			want: &TokenUsage{Input: 50, Output: 5},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newTestTracker(t)
+			attrs := append([]*commonpb.KeyValue{strKV("gen_ai.request.model", "m")}, tt.attrs...)
+			otlpPost(t, newOTLPHandler(tr), "/v1/traces", traces(span(1, attrs...)), false)
+			want := map[string]*TokenUsage{"m": tt.want}
+			if got := tr.report().Tokens; !reflect.DeepEqual(got, want) {
+				t.Fatalf("tokens = %s, want %s", jsonString(got), jsonString(want))
+			}
+		})
+	}
+}
+
 func TestOTLPTraces_SpecJSONEncoding(t *testing.T) {
 	// OTLP/JSON as exporters emit it: hex ids, int64 as strings, camelCase keys.
 	body := `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"harness"}}]},
@@ -369,6 +425,9 @@ func TestOTLPReceiver_BindsLoopbackOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.stop(context.Background())
+	if r.server.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want a positive timeout", r.server.ReadHeaderTimeout)
+	}
 
 	host, _, err := net.SplitHostPort(r.addr)
 	if err != nil {
