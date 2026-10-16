@@ -90,6 +90,7 @@ func run(parent context.Context, args []string) error {
 		runnerPort              int
 		runnerRouterAddr        string
 		summaryInterval         time.Duration
+		logFormat               string
 	)
 
 	fs := flag.NewFlagSet("ax-server", flag.ContinueOnError)
@@ -111,6 +112,7 @@ func run(parent context.Context, args []string) error {
 	fs.IntVar(&runnerPort, "runner-port", puller.DefaultPort, "Port of the task runner's GET /usage endpoint (direct pulls only)")
 	fs.StringVar(&runnerRouterAddr, "usage-router-addr", os.Getenv("ATENET_ROUTER_ADDR"), "If set (host:port, default $ATENET_ROUTER_ADDR), pull runner usage through the Substrate atenet-router with the ate-target-actor header instead of GET <workerIP>:<runner-port>; empty pulls directly")
 	fs.DurationVar(&summaryInterval, "summary-interval", metrics.DefaultSummaryInterval, "How often ax.task.usage_summary lines are logged for Running tasks (budget/Idle conditions are re-checked too); 0 disables")
+	fs.StringVar(&logFormat, "log-format", logFormatText, "Log format: text, or json (one JSON object per line; Cloud Logging parses it into jsonPayload, level as severity)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -125,7 +127,11 @@ func run(parent context.Context, args []string) error {
 		redisPassword = envPass
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logHandler, err := newLogHandler(logFormat, os.Stdout, slog.LevelInfo)
+	if err != nil {
+		return err
+	}
+	logger := slog.New(logHandler)
 	slog.SetDefault(logger)
 
 	slog.Info("starting ax-server",

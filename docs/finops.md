@@ -14,6 +14,7 @@ per-task summary logs. This is a PoC feature.
 | `--runner-port` | `80` | Port of the task runner's `GET /usage` (direct pulls only). |
 | `--usage-router-addr` | `$ATENET_ROUTER_ADDR` | Pull runner usage through the Substrate atenet-router (`GET http://<addr>/usage`, header `ate-target-actor: <atespace>/<task>`). Required on Substrate v0.5.0, whose workers do not expose actor ports on the pod IP. Empty = direct `GET <workerIP>:<runner-port>/usage`. |
 | `--summary-interval` | `10m` | How often an `ax.task.usage_summary` line is logged per Running task. Budget and Idle conditions are re-checked on the same tick. `0` disables. |
+| `--log-format` | `text` | `text`, or `json`: one JSON object per line, with the level as `severity`. Cloud Logging parses JSON lines into `jsonPayload`, so summaries can be filtered by field. The FinOps deploy uses `json`. |
 | `--default-task-image` | `gcr.io/ax-substrate/ate-images/ax-task-runner` | Runner image for tasks without `spec.image`. |
 | `--redis-addr` | `localhost:6379` | Task store, locks and usage store (`ax:usage:{atespace}:{name}`) share this Redis. Empty uses in-memory stores: a single replica for development only. |
 
@@ -94,3 +95,23 @@ Metrics (no per-task attributes; common attributes are `ax.atespace` and
 Each per-task summary is one slog line with `msg="ax.task.usage_summary"`
 and a `reason` of suspend, delete, threshold or periodic. It carries usage
 totals, tokens and the cost breakdown.
+
+### Dashboard
+
+`deploy/finops/dashboard.json` is a Cloud Monitoring dashboard, "AX Agent
+FinOps (PoC)". Its PromQL widgets read the metrics above through Managed
+Prometheus. On GKE the managed collector writes them through the Telemetry API,
+which keeps the dots, so names and labels are quoted:
+`sum by ("ax.label.agent") (increase({"ax.task.cost"}[1h]))`. Counter widgets
+use `(X unless X offset W) or increase(X[W])`. With plain `increase()`, a series
+created inside the window loses its first increment, such as a new agent's
+first token cost or a first budget crossing. ax-server also enables the OTel
+SDK's per-series start timestamps (`OTEL_GO_X_PER_SERIES_START_TIMESTAMPS=true`,
+the default unless set), so ad-hoc `increase()`/`rate()` queries count the
+first increment too. A logs panel
+shows the summary lines. Its filter matches both `--log-format=json`
+(`jsonPayload.msg`) and text (`textPayload`). To create or update the dashboard:
+
+```sh
+deploy/finops/apply-dashboard.sh [--project yiyu-gke-dev]
+```

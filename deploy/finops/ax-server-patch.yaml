@@ -42,6 +42,9 @@ spec:
             # pull runner usage through atenet-router (ate-target-actor header).
             - "--usage-router-addr=atenet-router.ate-system.svc.cluster.local:80"
             - "--summary-interval=10m"
+            # JSON logs -> Cloud Logging jsonPayload (dashboard logs panel filters
+            # jsonPayload.msg="ax.task.usage_summary").
+            - "--log-format=json"
             # Tasks without spec.image use the FinOps runner image (the
             # built-in gcr.io default is not pullable from this cluster).
             # Substrate v0.5.0 only accepts digest-pinned images; this is
@@ -56,6 +59,11 @@ spec:
               value: "http://otel-collector.ax-system.svc.cluster.local:4318"
             - name: OTEL_SERVICE_NAME
               value: "ax-server"
+            # Each counter series starts at its own creation time, so PromQL
+            # increase() counts its first increment (ax-server also defaults
+            # this to true).
+            - name: OTEL_GO_X_PER_SERIES_START_TIMESTAMPS
+              value: "true"
             # The managed collector sees the sidecar's IP, so ax-server names
             # its own pod in the resource (downward API). POD_* must come
             # before OTEL_RESOURCE_ATTRIBUTES for $(VAR) expansion.

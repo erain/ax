@@ -1,0 +1,296 @@
+{
+  "displayName": "AX Agent FinOps (PoC)",
+  "labels": {
+    "ax-finops": ""
+  },
+  "mosaicLayout": {
+    "columns": 48,
+    "tiles": [
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Total cost, last 24h ($)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum((({\"ax.task.cost\"} unless {\"ax.task.cost\"} offset 24h) or increase({\"ax.task.cost\"}[24h])))"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 12,
+        "yPos": 0,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Idle cost, last 24h ($)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum((({\"ax.task.cost\",\"ax.cost.kind\"=\"idle\"} unless {\"ax.task.cost\",\"ax.cost.kind\"=\"idle\"} offset 24h) or increase({\"ax.task.cost\",\"ax.cost.kind\"=\"idle\"}[24h])))"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 0,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Tokens, last 24h (input + output)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum((({\"ax.task.tokens\",\"gen_ai.token.type\"=~\"input|output\"} unless {\"ax.task.tokens\",\"gen_ai.token.type\"=~\"input|output\"} offset 24h) or increase({\"ax.task.tokens\",\"gen_ai.token.type\"=~\"input|output\"}[24h])))"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 36,
+        "yPos": 0,
+        "width": 12,
+        "height": 8,
+        "widget": {
+          "title": "Budget threshold crossings, last 24h",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum((({\"ax.budget.threshold_crossed\"} unless {\"ax.budget.threshold_crossed\"} offset 24h) or increase({\"ax.budget.threshold_crossed\"}[24h])))"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 8,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Cost by agent ($ per bucket)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"ax.label.agent\") ((({\"ax.task.cost\"} unless {\"ax.task.cost\"} offset ${__interval}) or increase({\"ax.task.cost\"}[${__interval}])))"
+                },
+                "plotType": "STACKED_BAR",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "USD",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 8,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Cost by kind ($ per bucket)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "label_replace(sum by (\"ax.cost.kind\") ((({\"ax.task.cost\"} unless {\"ax.task.cost\"} offset ${__interval}) or increase({\"ax.task.cost\"}[${__interval}]))), \"ax.cost.kind\", \"compute (non-idle)\", \"ax.cost.kind\", \"compute\")"
+                },
+                "plotType": "STACKED_BAR",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "USD",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Cost by customer ($ per bucket)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"ax.label.customer\") ((({\"ax.task.cost\"} unless {\"ax.task.cost\"} offset ${__interval}) or increase({\"ax.task.cost\"}[${__interval}])))"
+                },
+                "plotType": "STACKED_BAR",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "USD",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Tokens by model and type (per bucket; types overlap)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"gen_ai.request.model\", \"gen_ai.token.type\") ((({\"ax.task.tokens\"} unless {\"ax.task.tokens\"} offset ${__interval}) or increase({\"ax.task.tokens\"}[${__interval}])))"
+                },
+                "plotType": "LINE",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "tokens",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 40,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Active vs idle task hours (per bucket)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "label_replace(sum((({\"ax.task.active.time\"} unless {\"ax.task.active.time\"} offset ${__interval}) or increase({\"ax.task.active.time\"}[${__interval}]))) / 3600, \"series\", \"active (incl. idle)\", \"\", \"\")"
+                },
+                "plotType": "LINE",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              },
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "label_replace(sum((({\"ax.task.idle.time\"} unless {\"ax.task.idle.time\"} offset ${__interval}) or increase({\"ax.task.idle.time\"}[${__interval}]))) / 3600, \"series\", \"idle\", \"\", \"\")"
+                },
+                "plotType": "LINE",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "hours",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 40,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Budget threshold crossings by agent, dimension, level",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"ax.label.agent\", \"ax.budget.dimension\", \"ax.budget.level\") ((({\"ax.budget.threshold_crossed\"} unless {\"ax.budget.threshold_crossed\"} offset ${__interval}) or increase({\"ax.budget.threshold_crossed\"}[${__interval}])))"
+                },
+                "plotType": "STACKED_BAR",
+                "minAlignmentPeriod": "60s",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "yAxis": {
+              "label": "crossings",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 56,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Cost by agent and customer, last 24h ($)",
+          "timeSeriesTable": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"ax.label.agent\", \"ax.label.customer\") ((({\"ax.task.cost\"} unless {\"ax.task.cost\"} offset 24h) or increase({\"ax.task.cost\"}[24h])))"
+                }
+              }
+            ],
+            "metricVisualization": "NUMBER"
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 56,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Notes",
+          "text": {
+            "content": "**How to read this dashboard**\n\n- Costs are priced by ax-server from the rate card (`deploy/ratecard.yaml`), USD. Bar charts show **$ per bucket** (`${__interval}`); scorecards cover the last 24h.\n- Cost kinds are disjoint and sum to the total: **compute (non-idle)** + **idle** + **tokens** + **storage**.\n- Token types overlap (semconv): *input* includes *cache_read/cache_write*, *output* includes *reasoning*. Do not add them up; the token scorecard counts input + output.\n- Idle time is a subset of active time.\n- Counter queries use `(X unless X offset W) or increase(X[W])`, not plain `increase(X[W])`. A series created inside the window (a new agent's first cost delta, every first budget crossing) has no earlier sample, so plain `increase()` would drop its first increment.\n- Metrics (Managed Prometheus via the GKE managed collector, Telemetry API, dotted names): `ax.task.cost`, `ax.task.tokens`, `ax.task.cpu.time`, `ax.task.active.time`, `ax.task.idle.time`, `ax.budget.threshold_crossed`. Labels: `ax.atespace`, `ax.label.agent`, `ax.label.customer`, `ax.cost.kind`, `gen_ai.request.model`, `gen_ai.token.type`, `ax.budget.dimension`, `ax.budget.level`. No per-task labels: per-task detail is in the `ax.task.usage_summary` log lines below and in `ax describe task` / `ax cost export`.",
+            "format": "MARKDOWN"
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 72,
+        "width": 48,
+        "height": 24,
+        "widget": {
+          "title": "Per-task usage summaries (ax.task.usage_summary)",
+          "logsPanel": {
+            "filter": "resource.type=\"k8s_container\"\nresource.labels.cluster_name=\"ax-finops-poc\"\nresource.labels.namespace_name=\"ax-system\"\nresource.labels.container_name=\"ax-server\"\n(jsonPayload.msg=\"ax.task.usage_summary\" OR textPayload:\"msg=ax.task.usage_summary\")",
+            "resourceNames": [
+              "projects/yiyu-gke-dev"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}
