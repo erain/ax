@@ -31,14 +31,15 @@ package server
 // (two pulls, several replicas) suspend at most once.
 //
 // Runner sessions: the usage record keeps CommandExited per runner session
-// (T03). On gVisor a resume restores the checkpointed process tree, so the
-// runner keeps its session and keeps reporting commandExited=true after a
-// resume; with a fresh container a new session starts and the flag resets
-// until the command exits again. The Completed condition therefore records
-// the completed runner session, ResumeTask keeps it (Completed=False,
+// (T03). Agent Substrate v0.5.0 restores only the filesystem on resume
+// (gVisor --fs-restore-image-path; processes are not checkpointed), so a
+// resume starts a fresh process tree: the runner gets a new session and
+// re-runs the task command, and commandExited resets until that command exits
+// again. Until the first pull of the new session, the usage record still holds
+// the old session's commandExited=true. The Completed condition therefore
+// records the completed runner session, ResumeTask keeps it (Completed=False,
 // Resumed), and a session that already completed is never completed again.
-// A resumed task stays Running (Idle=True/CommandExited) until it is
-// suspended, deleted, or a new session's command exits.
+// When the re-run command of the new session exits, the task completes again.
 
 import (
 	"context"
@@ -145,7 +146,7 @@ func shouldComplete(task *v1alpha1.Task, u *usage.TaskUsage) bool {
 		return false
 	}
 	if prev, ok := completedSession(task); ok && prev == u.State.RunnerSession {
-		return false // this runner session already completed; the task was resumed
+		return false // this session already completed; stale record right after a resume
 	}
 	return true
 }
