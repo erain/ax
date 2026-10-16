@@ -434,12 +434,14 @@ func (s *Server) ResumeTask(ctx context.Context, req *v1alpha1.ResumeTaskRequest
 			return nil, status.Errorf(codes.Internal, "resuming task on substrate: %v", err)
 		}
 		task.Status = reconciled.Status
+		s.markResumed(task)
 		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.UpdateTaskStatus(ctx, atespace, taskName, task.Status); err != nil {
 			return nil, status.Errorf(codes.Internal, "updating task status: %v", err)
 		}
 		s.emitCrossings(ctx, task, ev)
 	} else {
+		s.markResumed(task)
 		ev := s.evaluateLocked(ctx, task)
 		if err := s.store.SaveTask(ctx, task); err != nil {
 			return nil, status.Errorf(codes.Internal, "resuming task: %v", err)

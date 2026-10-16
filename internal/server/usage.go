@@ -134,6 +134,9 @@ type finops struct {
 	// same write skips its redundant pre-check (one entry per task).
 	checkedMu sync.Mutex
 	checked   map[usage.Key]*usage.TaskUsage
+
+	// completions tracks background suspend-on-completion runs (completion.go).
+	completions completions
 }
 
 func (f *finops) markChecked(key usage.Key, u *usage.TaskUsage) {
@@ -193,6 +196,7 @@ func newFinops(s *Server, o *UsageOptions) *finops {
 	f.store = &observedStore{Store: o.Store, onCommit: func(ctx context.Context, key usage.Key, u *usage.TaskUsage) {
 		s.checkBudget(ctx, key, nil)
 		f.markChecked(key, u)
+		s.maybeComplete(ctx, key, nil, u)
 	}}
 	var hooks hookFanout
 	if f.metrics != nil {
@@ -393,8 +397,8 @@ func (s *Server) ListRunningTasks(ctx context.Context) ([]*v1alpha1.Task, error)
 }
 
 // RunUsageSummaries writes a periodic ax.task.usage_summary line for every
-// Running task and re-evaluates its budget/Idle conditions (a safety net for
-// skipped checks) every interval (metrics.DefaultSummaryInterval when <= 0)
+// Running task and re-evaluates its budget/Idle conditions and
+// suspend-on-completion (a safety net for skipped checks) every interval (metrics.DefaultSummaryInterval when <= 0)
 // until ctx is done. Start it in a goroutine.
 func (s *Server) RunUsageSummaries(ctx context.Context, interval time.Duration) {
 	if s.fin == nil {
@@ -437,6 +441,7 @@ func (s *Server) UsageSweep(ctx context.Context) error {
 		key := keyOf(t)
 		u := all[key]
 		s.checkBudget(ctx, key, u)
+		s.maybeComplete(ctx, key, t, u)
 		s.fin.summary.Log(ctx, metrics.ReasonPeriodic, metrics.TaskSummary{Key: key, Labels: t.GetMetadata().GetLabels(), Usage: u})
 	}
 	return nil
