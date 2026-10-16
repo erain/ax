@@ -24,6 +24,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -115,6 +117,10 @@ func run(parent context.Context, args []string) error {
 	fs.StringVar(&logFormat, "log-format", logFormatText, "Log format: text, or json (one JSON object per line; Cloud Logging parses it into jsonPayload, level as severity)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if err := checkRouterAddr(runnerRouterAddr); err != nil {
+		return fmt.Errorf("invalid --usage-router-addr %q: %w", runnerRouterAddr, err)
 	}
 
 	if envAddr := os.Getenv("ADDR"); envAddr != "" {
@@ -306,4 +312,27 @@ func run(parent context.Context, args []string) error {
 		slog.Warn("flushing metrics on shutdown failed", "error", err)
 	}
 	return runErr
+}
+
+// checkRouterAddr validates --usage-router-addr: empty, or host:port with a
+// non-empty host and a numeric port, and no scheme, path or userinfo (the
+// puller builds http://<addr>/usage).
+func checkRouterAddr(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if host == "" {
+		return errors.New("missing host")
+	}
+	if strings.ContainsAny(host, "/@?#% \t") {
+		return errors.New("want host:port without scheme, path or userinfo")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
 }

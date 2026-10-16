@@ -71,10 +71,21 @@ type TaskLister interface {
 	ListRunningTasks(ctx context.Context) ([]*v1alpha1.Task, error)
 }
 
+// TaskGetter re-reads one task. In router mode the puller re-reads the task
+// immediately before contacting the router (sweep and Flush) and skips the
+// pull unless it is still Running on the same worker IP, because a router
+// request resumes a suspended actor. A missing task is reported as (nil, nil).
+type TaskGetter interface {
+	LookupTask(ctx context.Context, atespace, name string) (*v1alpha1.Task, error)
+}
+
 // Options configures a Puller. Zero values select the defaults.
 type Options struct {
 	// Tasks lists the running tasks to pull (required for Run/Sweep).
 	Tasks TaskLister
+	// Getter re-reads a task before a router pull (see TaskGetter). Nil =
+	// Tasks if it implements TaskGetter, else no re-read.
+	Getter TaskGetter
 	// Store persists usage (required).
 	Store usage.Store
 	// Pricer prices each increment; nil charges nothing.
@@ -96,7 +107,9 @@ type Options struct {
 	// Substrate v0.5.0 workers do not expose actor ports on the pod IP (the
 	// router reaches actors through the worker's atunnel on :443), so this is
 	// required there. The router routes plain HTTP to actor port 80 and
-	// resumes a suspended actor, so only Running tasks are ever pulled.
+	// resumes a suspended actor, so only Running tasks are ever pulled, and
+	// right before each request the task is re-read (Getter) and the usage
+	// record's last actor state is checked (TaskUsage.ActorStopped).
 	RouterAddr string
 	// Timeout bounds one pull, including the store update (default 5s).
 	Timeout time.Duration
@@ -118,19 +131,29 @@ type Stats struct {
 	Failures int64
 	// Applied is the number of pulls that recorded a non-zero increment.
 	Applied int64
+	// Skipped is the number of router pulls dropped by the pre-request
+	// re-check (task no longer Running on the same worker, or the actor
+	// reported stopped); they are not counted in Pulls.
+	Skipped int64
 }
 
 // Puller pulls runner usage reports into the usage store.
 type Puller struct {
 	o Options
 
-	sweeps, pulls, failures, applied atomic.Int64
+	sweeps, pulls, failures, applied, skipped atomic.Int64
 }
 
 // New returns a Puller with defaults applied.
 func New(o Options) *Puller {
+	if o.Concurrency <= 0 {
+		o.Concurrency = DefaultConcurrency
+	}
+	if o.Getter == nil {
+		o.Getter, _ = o.Tasks.(TaskGetter)
+	}
 	if o.Client == nil {
-		o.Client = &http.Client{Transport: newTransport()}
+		o.Client = &http.Client{Transport: newTransport(o.Concurrency)}
 	} else {
 		c := *o.Client
 		o.Client = &c
@@ -147,9 +170,6 @@ func New(o Options) *Puller {
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
 	}
-	if o.Concurrency <= 0 {
-		o.Concurrency = DefaultConcurrency
-	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -159,14 +179,16 @@ func New(o Options) *Puller {
 	return &Puller{o: o}
 }
 
-// newTransport returns a transport for direct pod-IP pulls: no proxy, small
-// idle pool, bounded handshakes.
-func newTransport() *http.Transport {
+// newTransport returns the default transport: no proxy, bounded handshakes,
+// and up to concurrency idle connections per host. Direct pulls reach a
+// different host (worker IP) per task; router pulls all go to one host, so
+// keeping one idle connection per concurrent pull lets sweeps reuse them.
+func newTransport(concurrency int) *http.Transport {
 	return &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: DefaultTimeout, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          64,
-		MaxIdleConnsPerHost:   1,
+		MaxIdleConns:          max(64, concurrency),
+		MaxIdleConnsPerHost:   concurrency,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: DefaultTimeout,
 		DisableCompression:    true,
@@ -180,6 +202,7 @@ func (p *Puller) Stats() Stats {
 		Pulls:    p.pulls.Load(),
 		Failures: p.failures.Load(),
 		Applied:  p.applied.Load(),
+		Skipped:  p.skipped.Load(),
 	}
 }
 
@@ -214,17 +237,20 @@ func (p *Puller) Sweep(ctx context.Context) {
 	}
 	sem := make(chan struct{}, p.o.Concurrency)
 	var (
-		wg                      sync.WaitGroup
-		pulled, failed, applied atomic.Int64
-		lastErrMu               sync.Mutex
-		lastErr                 error
-		lastErrTask, lastErrIP  string
+		wg                               sync.WaitGroup
+		pulled, failed, applied, skipped atomic.Int64
+		lastErrMu                        sync.Mutex
+		lastErr                          error
+		lastErrTask, lastErrIP           string
 	)
 	defer func() {
-		// One line per sweep that contacted runners, so pull failures are
-		// visible without debug logging.
-		if n := pulled.Load(); n > 0 {
+		// One line per sweep that contacted runners (or skipped a router
+		// pull), so pull failures are visible without debug logging.
+		if n, sk := pulled.Load(), skipped.Load(); n > 0 || sk > 0 {
 			attrs := []any{"pulled", n, "failed", failed.Load(), "applied", applied.Load()}
+			if sk > 0 {
+				attrs = append(attrs, "skipped", sk)
+			}
 			if lastErr != nil {
 				attrs = append(attrs, "lastErrorTask", lastErrTask, "lastErrorWorkerIP", lastErrIP, "lastError", lastErr.Error())
 			}
@@ -245,7 +271,11 @@ func (p *Puller) Sweep(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			ok, err := p.pullLogged(ctx, task)
+			ok, skip, err := p.pullLogged(ctx, task)
+			if skip {
+				skipped.Add(1)
+				return
+			}
 			pulled.Add(1)
 			if err != nil {
 				failed.Add(1)
@@ -263,21 +293,34 @@ func (p *Puller) Sweep(ctx context.Context) {
 	p.sweeps.Add(1)
 }
 
-// Flush synchronously pulls one task (used before Suspend/Delete). It returns
-// within Timeout. A task that is not Running or has no worker IP is not
-// contacted and Flush returns nil. Errors are logged; callers should not
+// Flush synchronously pulls one task (used before Suspend/Delete, while the
+// task is still Running). It returns within Timeout. A task that is not
+// Running or has no worker IP is not contacted and Flush returns nil, as is a
+// router pull dropped by the re-check. Errors are logged; callers should not
 // fail their operation on them.
 func (p *Puller) Flush(ctx context.Context, task *v1alpha1.Task) error {
 	if !pullable(task) {
 		return nil
 	}
-	_, err := p.pullLogged(ctx, task)
+	_, _, err := p.pullLogged(ctx, task)
 	return err
 }
 
-func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) (bool, error) {
+// errSkipped reports a pull dropped by the router-mode re-check.
+var errSkipped = errors.New("pull skipped")
+
+func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) (applied, skipped bool, err error) {
+	applied, err = p.pull(ctx, task)
+	if errors.Is(err, errSkipped) {
+		p.skipped.Add(1)
+		p.o.Logger.DebugContext(ctx, "usage puller: pull skipped",
+			"atespace", task.GetMetadata().GetAtespace(),
+			"task", task.GetMetadata().GetName(),
+			"workerIP", task.GetStatus().GetWorkerIp(),
+			"reason", err)
+		return false, true, nil
+	}
 	p.pulls.Add(1)
-	applied, err := p.pull(ctx, task)
 	if err != nil {
 		p.failures.Add(1)
 		p.o.Logger.DebugContext(ctx, "usage puller: pull failed",
@@ -286,7 +329,7 @@ func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) (bool, err
 			"workerIP", task.GetStatus().GetWorkerIp(),
 			"error", err)
 	}
-	return applied, err
+	return applied, false, err
 }
 
 // pullable reports whether the task's runner may be contacted.
@@ -300,6 +343,11 @@ func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) (bool, error)
 	ctx, cancel := context.WithTimeout(parent, p.o.Timeout)
 	defer cancel()
 
+	if p.o.RouterAddr != "" {
+		if err := p.recheck(ctx, task); err != nil {
+			return false, err
+		}
+	}
 	r, err := p.fetch(ctx, task)
 	if err != nil {
 		return false, err
@@ -352,6 +400,39 @@ func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) (bool, error)
 		p.o.Hooks.OnDelta(hctx, key, d, c, u)
 	}
 	return true, nil
+}
+
+// recheck runs right before a router request, which would resume a
+// suspended actor: the task is re-read (one store GET, if a Getter is
+// configured) and must still be Running on the snapshot's worker IP, and the
+// usage record's last actor state must not be a closing one. It returns an
+// error wrapping errSkipped to drop the pull, or a read error.
+func (p *Puller) recheck(ctx context.Context, task *v1alpha1.Task) error {
+	atespace, name := task.GetMetadata().GetAtespace(), task.GetMetadata().GetName()
+	if p.o.Getter != nil {
+		cur, err := p.o.Getter.LookupTask(ctx, atespace, name)
+		if err != nil {
+			return fmt.Errorf("re-reading task: %w", err)
+		}
+		switch {
+		case cur == nil:
+			return fmt.Errorf("%w: task deleted", errSkipped)
+		case cur.GetStatus().GetPhase() != PhaseRunning:
+			return fmt.Errorf("%w: task phase %q", errSkipped, cur.GetStatus().GetPhase())
+		case cur.GetStatus().GetWorkerIp() != task.GetStatus().GetWorkerIp():
+			return fmt.Errorf("%w: worker IP changed to %q", errSkipped, cur.GetStatus().GetWorkerIp())
+		}
+	}
+	u, err := p.o.Store.Get(ctx, usage.Key{Atespace: atespace, Name: name})
+	switch {
+	case errors.Is(err, usage.ErrNotFound):
+		// No actor events recorded yet.
+	case err != nil:
+		return fmt.Errorf("reading usage: %w", err)
+	case u.ActorStopped():
+		return fmt.Errorf("%w: actor stopped (last state %q)", errSkipped, u.State.Marks[len(u.State.Marks)-1].State)
+	}
+	return nil
 }
 
 // report mirrors the runner's GET /usage JSON (runner.UsageReport).

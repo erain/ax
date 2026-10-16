@@ -939,17 +939,25 @@ func TestPull_ViaRouter(t *testing.T) {
 	}))
 	defer router.Close()
 
+	// The worker IP and Port point at a live runner that must never be
+	// dialed in router mode.
+	worker := newFakeRunner(t)
+	worker.set(http.StatusOK, reportJSON(t, "direct", t0, map[string]map[string]any{"m": {"input": 1000}}))
 	store := usage.NewMemoryStore()
-	tk := task("t1", PhaseRunning, "10.0.0.9") // worker IP is never dialed
+	tk := task("t1", PhaseRunning, worker.ip)
 	tk.Metadata.Atespace = "team-a"
 	p := New(Options{
-		Tasks:      &staticLister{tasks: []*v1alpha1.Task{tk, task("t2", "Suspended", "10.0.0.9")}},
+		Tasks:      &staticLister{tasks: []*v1alpha1.Task{tk, task("t2", "Suspended", worker.ip)}},
 		Store:      store,
+		Port:       worker.port,
 		RouterAddr: router.Listener.Addr().String(),
 		Timeout:    time.Second,
 		Logger:     quietLogger(),
 	})
 	p.Sweep(context.Background())
+	if n := worker.hits.Load(); n != 0 {
+		t.Errorf("worker IP dialed %d times in router mode, want 0", n)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -969,5 +977,207 @@ func TestPull_ViaRouter(t *testing.T) {
 	}
 	if len(targets) != 1 {
 		t.Errorf("router requests after Flush = %d, want 1", len(targets))
+	}
+}
+
+// liveTasks is a TaskLister + TaskGetter over a mutable task map; onList runs
+// after ListRunningTasks returned its snapshot (e.g. a concurrent Suspend).
+type liveTasks struct {
+	mu     sync.Mutex
+	tasks  map[string]*v1alpha1.Task
+	getErr error
+	gets   int
+	onList func()
+}
+
+func newLiveTasks(ts ...*v1alpha1.Task) *liveTasks {
+	l := &liveTasks{tasks: map[string]*v1alpha1.Task{}}
+	for _, t := range ts {
+		l.tasks[t.GetMetadata().GetName()] = t
+	}
+	return l
+}
+
+func (l *liveTasks) ListRunningTasks(context.Context) ([]*v1alpha1.Task, error) {
+	l.mu.Lock()
+	var out []*v1alpha1.Task
+	for _, t := range l.tasks {
+		if t.GetStatus().GetPhase() == PhaseRunning {
+			out = append(out, task(t.GetMetadata().GetName(), PhaseRunning, t.GetStatus().GetWorkerIp()))
+		}
+	}
+	onList := l.onList
+	l.mu.Unlock()
+	if onList != nil {
+		onList()
+	}
+	return out, nil
+}
+
+func (l *liveTasks) LookupTask(_ context.Context, atespace, name string) (*v1alpha1.Task, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.gets++
+	if l.getErr != nil {
+		return nil, l.getErr
+	}
+	t, ok := l.tasks[name]
+	if !ok || t.GetMetadata().GetAtespace() != atespace {
+		return nil, nil
+	}
+	return task(name, t.GetStatus().GetPhase(), t.GetStatus().GetWorkerIp()), nil
+}
+
+func (l *liveTasks) set(name, phase, ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tasks[name] = task(name, phase, ip)
+}
+
+func newRouter(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 7}}))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+// T12c R1: a Suspend that lands between the sweep's list and the pull sends
+// no router request (the router would resume the suspended actor).
+func TestSweep_SuspendBetweenListAndPullSkipsRouter(t *testing.T) {
+	router, hits := newRouter(t)
+	tasks := newLiveTasks(task("t1", PhaseRunning, "10.0.0.9"), task("t2", PhaseRunning, "10.0.0.8"))
+	tasks.onList = func() { tasks.set("t1", "Suspended", "") }
+	var buf syncBuffer
+	p := New(Options{
+		Tasks: tasks, Store: usage.NewMemoryStore(), RouterAddr: router.Listener.Addr().String(),
+		Timeout: time.Second, Logger: slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	p.Sweep(context.Background())
+	if n := hits.Load(); n != 1 {
+		t.Errorf("router requests = %d, want 1 (t2 only)", n)
+	}
+	if st := p.Stats(); st.Pulls != 1 || st.Skipped != 1 || st.Failures != 0 {
+		t.Errorf("stats = %+v, want 1 pull, 1 skipped", st)
+	}
+	if got := buf.String(); !strings.Contains(got, `pulled=1 failed=0 applied=1 skipped=1`) {
+		t.Errorf("sweep log = %q", got)
+	}
+
+	// A sweep whose only task is skipped still logs its summary.
+	buf.Reset()
+	tasks.onList = func() { tasks.set("t2", "Suspended", "") }
+	p.Sweep(context.Background())
+	if got := buf.String(); !strings.Contains(got, `pulled=0 failed=0 applied=0 skipped=1`) {
+		t.Errorf("all-skipped sweep log = %q", got)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("router requests after second sweep = %d, want 1", n)
+	}
+}
+
+// T12c R1: the router-mode re-check, for Flush (called by SuspendTask while
+// the task is still Running) and the closing-state check on the usage record.
+func TestPull_RouterRecheck(t *testing.T) {
+	// record stores a usage record whose state events are running, then state.
+	record := func(t *testing.T, s usage.Store, name, state string) {
+		t.Helper()
+		err := s.Update(context.Background(), usage.Key{Atespace: "default", Name: name}, func(u *usage.TaskUsage) error {
+			u.ApplyStateChange(usage.StateChange{Time: t0.Add(-time.Minute), State: "running"})
+			u.ApplyStateChange(usage.StateChange{Time: t0.Add(-time.Second), State: state})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		stored    *v1alpha1.Task // nil = deleted
+		getErr    error
+		lastState string // usage record's last state event ("" = no record)
+		wantHits  int64
+		wantErr   bool
+	}{
+		{name: "still running", stored: task("t1", PhaseRunning, "10.0.0.9"), wantHits: 1},
+		{name: "running, last state running", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "running", wantHits: 1},
+		{name: "suspended", stored: task("t1", "Suspended", "")},
+		{name: "deleted"},
+		{name: "rescheduled", stored: task("t1", PhaseRunning, "10.0.0.7")},
+		{name: "re-read fails", stored: task("t1", PhaseRunning, "10.0.0.9"), getErr: errors.New("redis down"), wantErr: true},
+		{name: "actor suspending", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "suspending"},
+		{name: "actor suspended", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "suspended"},
+		{name: "actor crashed", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "crashed"},
+		{name: "actor deleted", stored: task("t1", PhaseRunning, "10.0.0.9"), lastState: "deleted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router, hits := newRouter(t)
+			tasks := newLiveTasks()
+			if tc.stored != nil {
+				tasks.tasks["t1"] = tc.stored
+			}
+			tasks.getErr = tc.getErr
+			store := usage.NewMemoryStore()
+			if tc.lastState != "" {
+				record(t, store, "t1", tc.lastState)
+			}
+			p := New(Options{Tasks: tasks, Store: store, RouterAddr: router.Listener.Addr().String(), Timeout: time.Second, Logger: quietLogger()})
+			err := p.Flush(context.Background(), task("t1", PhaseRunning, "10.0.0.9"))
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Flush = %v, wantErr %v", err, tc.wantErr)
+			}
+			if n := hits.Load(); n != tc.wantHits {
+				t.Errorf("router requests = %d, want %d", n, tc.wantHits)
+			}
+			st := p.Stats()
+			wantSkipped := int64(0)
+			if tc.wantHits == 0 && !tc.wantErr {
+				wantSkipped = 1
+			}
+			if st.Skipped != wantSkipped {
+				t.Errorf("stats = %+v, want %d skipped", st, wantSkipped)
+			}
+			if tc.wantErr && st.Failures != 1 {
+				t.Errorf("stats = %+v, want 1 failure", st)
+			}
+		})
+	}
+}
+
+// Direct pod-IP pulls never resume an actor: no re-check (the getter is not
+// called and a closing state does not block the pull).
+func TestPull_DirectModeHasNoRecheck(t *testing.T) {
+	f := newFakeRunner(t)
+	f.set(http.StatusOK, reportJSON(t, "s1", t0, map[string]map[string]any{"m": {"input": 1}}))
+	tasks := newLiveTasks()
+	store := usage.NewMemoryStore()
+	p := newTestPuller(f, tasks, store, nil, nil)
+	if err := p.Flush(context.Background(), task("t1", PhaseRunning, f.ip)); err != nil {
+		t.Fatal(err)
+	}
+	if f.hits.Load() != 1 || tasks.gets != 0 {
+		t.Errorf("runner hits = %d, getter calls = %d, want 1, 0", f.hits.Load(), tasks.gets)
+	}
+}
+
+// R3: the default transport keeps one idle connection per concurrent pull
+// (router pulls all go to one host).
+func TestNew_TransportIdlePoolMatchesConcurrency(t *testing.T) {
+	for _, c := range []int{0, 3, 100} {
+		p := New(Options{Concurrency: c})
+		tr, ok := p.o.Client.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("transport = %T", p.o.Client.Transport)
+		}
+		want := c
+		if c == 0 {
+			want = DefaultConcurrency
+		}
+		if tr.MaxIdleConnsPerHost != want || tr.MaxIdleConns < want {
+			t.Errorf("Concurrency %d: MaxIdleConnsPerHost = %d, MaxIdleConns = %d", c, tr.MaxIdleConnsPerHost, tr.MaxIdleConns)
+		}
 	}
 }

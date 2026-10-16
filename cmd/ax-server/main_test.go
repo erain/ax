@@ -117,3 +117,23 @@ func TestRun_FlagErrors(t *testing.T) {
 		t.Errorf("missing rate card: err = %v, want a rate card error", err)
 	}
 }
+
+// T12c N1: --usage-router-addr is validated at startup.
+func TestRun_RejectsBadRouterAddr(t *testing.T) {
+	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("ATENET_ROUTER_ADDR", "")
+	for _, addr := range []string{
+		"http://atenet-router:80", "atenet-router", "atenet-router:80/usage", ":80",
+		"atenet-router:http", "atenet-router:0", "user@atenet-router:80",
+	} {
+		err := run(context.Background(), []string{"--redis-addr=", "--addr=127.0.0.1:0", "--otlp-addr=", "--usage-router-addr=" + addr})
+		if err == nil || !strings.Contains(err.Error(), "--usage-router-addr") {
+			t.Errorf("--usage-router-addr=%s: err = %v, want a validation error", addr, err)
+		}
+	}
+	for _, addr := range []string{"", "atenet-router.ate-system.svc.cluster.local:80", "10.0.0.1:8080", "[::1]:80"} {
+		if err := checkRouterAddr(addr); err != nil {
+			t.Errorf("checkRouterAddr(%q) = %v, want nil", addr, err)
+		}
+	}
+}

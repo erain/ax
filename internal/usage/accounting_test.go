@@ -767,3 +767,46 @@ func TestAccounting_RealSubstrateSequence(t *testing.T) {
 		}
 	}
 }
+
+// ActorStopped follows the newest state event; a later sample of a live
+// epoch (resume seen through samples first) clears it, a final one does not.
+func TestActorStopped(t *testing.T) {
+	const e1 = int64(1792149621509495056)
+	e2 := e1 + int64(100*time.Second)
+	ts := func(sec float64) time.Time {
+		return time.Unix(0, e1).UTC().Add(time.Duration(sec * float64(time.Second)))
+	}
+	sample := func(sec float64, epoch int64, kind string) input {
+		return input{sample: &UsageSample{Time: ts(sec), Epoch: epoch, Kind: kind, CPUSeconds: f64(sec / 100)}}
+	}
+	state := func(sec float64, s string) input {
+		return input{change: &StateChange{Time: ts(sec), State: s}}
+	}
+	steps := []struct {
+		in   input
+		want bool
+	}{
+		{sample(0.1, e1, "initial"), false}, // no state event yet
+		{state(0.2, "running"), false},
+		{sample(60, e1, "periodic"), false},
+		{state(61, "suspending"), true},
+		{sample(61.1, e1, "final"), true}, // final sample after the closing mark
+		{state(61.5, "suspended"), true},
+		{sample(100.1, e2, "initial"), false}, // resumed; state event not seen yet
+		{state(100.2, "running"), false},
+		{state(150, "crashed"), true},
+		{state(151, "resuming"), false},
+		{state(152, "deleting"), true},
+		{state(153, "deleted"), true},
+	}
+	u := NewTaskUsage()
+	if u.ActorStopped() {
+		t.Fatal("empty record: ActorStopped = true")
+	}
+	for i, s := range steps {
+		applyAll(u, []input{s.in})
+		if got := u.ActorStopped(); got != s.want {
+			t.Errorf("step %d: ActorStopped = %v, want %v", i, got, s.want)
+		}
+	}
+}
