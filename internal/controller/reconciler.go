@@ -189,21 +189,32 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, extraEnv)
 
 		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, extraEnv)
-		if err != nil && status.Code(err) == codes.InvalidArgument {
+		// There is no fallback to the base template: spec.image is always
+		// set (defaulted above), and the base template would silently run
+		// a different image and env than requested.
+		switch {
+		case err != nil && substrate.IsTransientError(err):
+			r.setNotReady(task, "SubstrateUnavailable", err.Error(), now)
+			task.Status.Phase = "Pending"
+			return task, fmt.Errorf("creating actor template: %w", err)
+		case err != nil && status.Code(err) == codes.InvalidArgument:
 			// Substrate rejected the template itself (for example, v0.5.0
-			// requires digest-pinned images). The default template would not
-			// run the requested image either, so report the real reason
-			// instead of a confusing "actor template not found".
+			// requires digest-pinned images).
 			r.setNotReady(task, "ActorTemplateInvalid", err.Error(), now)
 			task.Status.Phase = "Failed"
 			return task, fmt.Errorf("creating actor template: %w", err)
-		} else if err != nil {
-			slog.Warn("could not create custom ActorTemplate, falling back to default template", "error", err)
-		} else if tmpl != nil && tmpl.Metadata != nil {
+		case err != nil:
+			r.setNotReady(task, "ActorTemplateCreationFailed", err.Error(), now)
+			task.Status.Phase = "Failed"
+			return task, fmt.Errorf("creating actor template: %w", err)
+		case tmpl != nil && tmpl.Metadata != nil:
 			templateAtespace = tmpl.Metadata.Atespace
 			templateName = tmpl.Metadata.Name
-			slog.Info("using custom ActorTemplate for actor", "templateAtespace", templateAtespace, "templateName", templateName)
+		default:
+			templateAtespace = atespace
+			templateName = customTemplateName
 		}
+		slog.Info("using custom ActorTemplate for actor", "templateAtespace", templateAtespace, "templateName", templateName)
 	}
 
 	actor, err := r.client.EnsureActor(ctx, atespace, actorName, templateAtespace, templateName)

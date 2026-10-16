@@ -1002,3 +1002,81 @@ func TestTaskReconciler_InvalidTemplateFailsTask(t *testing.T) {
 		t.Errorf("actors created = %v, want none", mockSrv.createdActors)
 	}
 }
+
+// T12c R2: other ActorTemplate creation errors never fall back to the base
+// template (which would run a different image than spec.image). A transient
+// error leaves the task Pending (SubstrateUnavailable) and a later reconcile
+// recovers; anything else fails it with the real template error.
+func TestTaskReconciler_TemplateCreationErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantPhase  string
+		wantReason string
+	}{
+		{"transient deadline", status.Error(codes.DeadlineExceeded, "control plane timed out"), "Pending", "SubstrateUnavailable"},
+		{"permission denied", status.Error(codes.PermissionDenied, "ax-server may not create templates"), "Failed", "ActorTemplateCreationFailed"},
+		{"internal", status.Error(codes.Internal, "etcd write failed"), "Failed", "ActorTemplateCreationFailed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("failed to listen: %v", err)
+			}
+			defer lis.Close()
+			// The base template exists, so a fallback would succeed.
+			mockSrv := &mockControlServer{createTmplErr: tc.err, actorTemplates: map[string]bool{"test-template": true}}
+			grpcServer := grpc.NewServer()
+			ateapipb.RegisterControlServer(grpcServer, mockSrv)
+			go grpcServer.Serve(lis)
+			defer grpcServer.Stop()
+			client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatalf("failed to create substrate client: %v", err)
+			}
+			defer client.Close()
+
+			reconciler := controller.NewTaskReconciler(client, "test-template", v1alpha1.DefaultSystemNamespace)
+			reconciler.SecretResolver = noSecrets
+			task := &v1alpha1.Task{
+				Metadata: &v1alpha1.ObjectMeta{Name: "tmpl-err", Atespace: "default"},
+				Spec:     &v1alpha1.TaskSpec{Image: "registry.example.com/runner@sha256:0123"},
+				Status:   &v1alpha1.TaskStatus{Phase: "Suspended"},
+			}
+			reconciled, err := reconciler.Reconcile(context.Background(), task)
+			msg := status.Convert(tc.err).Message()
+			if err == nil || !strings.Contains(err.Error(), msg) {
+				t.Fatalf("Reconcile error = %v, want the template error %q", err, msg)
+			}
+			if got := reconciled.GetStatus().GetPhase(); got != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", got, tc.wantPhase)
+			}
+			assertCondition(t, reconciled, "Ready", "False", tc.wantReason)
+			for _, c := range reconciled.GetStatus().GetConditions() {
+				if c.GetType() == "Ready" && !strings.Contains(c.GetMessage(), msg) {
+					t.Errorf("Ready message = %q, want it to contain %q", c.GetMessage(), msg)
+				}
+			}
+			if len(mockSrv.createdActors) != 0 {
+				t.Errorf("actors created = %v, want none (no base-template fallback)", mockSrv.createdActors)
+			}
+			if tc.wantPhase != "Pending" {
+				return
+			}
+			// Substrate recovers: the next reconcile creates the custom
+			// template and the actor.
+			mockSrv.createTmplErr = nil
+			reconciled.Status.Phase = "Suspended"
+			recovered, err := reconciler.Reconcile(context.Background(), reconciled)
+			if err != nil {
+				t.Fatalf("Reconcile after recovery: %v", err)
+			}
+			if got := recovered.GetStatus().GetPhase(); got != "Suspended" {
+				t.Errorf("phase after recovery = %q, want Suspended", got)
+			}
+			if len(mockSrv.createdTemplates) != 1 || len(mockSrv.createdActors) != 1 {
+				t.Errorf("after recovery: templates %d, actors %v, want 1 and [tmpl-err]", len(mockSrv.createdTemplates), mockSrv.createdActors)
+			}
+		})
+	}
+}

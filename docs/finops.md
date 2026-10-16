@@ -12,9 +12,9 @@ per-task summary logs. This is a PoC feature.
 | `--rate-card` | (empty) | Rate card YAML path. The file is re-read when it changes (checked at most every 10s), and an invalid edit keeps the previous card. Empty uses a built-in card that prices nothing (usage is still recorded; tokens are flagged partially unpriced). |
 | `--usage-pull-interval` | `60s` | How often runner token usage is pulled from Running tasks. `0` disables periodic pulls; Suspend/Delete still flush. |
 | `--runner-port` | `80` | Port of the task runner's `GET /usage` (direct pulls only). |
-| `--usage-router-addr` | `$ATENET_ROUTER_ADDR` | Pull runner usage through the Substrate atenet-router (`GET http://<addr>/usage`, header `ate-target-actor: <atespace>/<task>`). Required on Substrate v0.5.0, whose workers do not expose actor ports on the pod IP. Empty = direct `GET <workerIP>:<runner-port>/usage`. |
+| `--usage-router-addr` | `$ATENET_ROUTER_ADDR` | Pull runner usage through the Substrate atenet-router (`GET http://<addr>/usage`, header `ate-target-actor: <atespace>/<task>`). Required on Substrate v0.5.0, whose workers do not expose actor ports on the pod IP. Empty = direct `GET <workerIP>:<runner-port>/usage`. Must be `host:port` (no scheme or path); ax-server refuses to start otherwise. |
 | `--summary-interval` | `10m` | How often an `ax.task.usage_summary` line is logged per Running task. Budget and Idle conditions are re-checked on the same tick. `0` disables. |
-| `--default-task-image` | `gcr.io/ax-substrate/ate-images/ax-task-runner` | Runner image for tasks without `spec.image`. |
+| `--default-task-image` | `gcr.io/ax-substrate/ate-images/ax-task-runner` | Runner image for tasks without `spec.image`. Substrate v0.5.0 only accepts digest-pinned images (`<repo>@sha256:<digest>`), so on v0.5.0 set this to a digest ref (the built-in default is a tag and is rejected), and any explicit `spec.image` must be one too. A rejected image fails the task with `Ready=False`, reason `ActorTemplateInvalid` and Substrate's message. Other ActorTemplate creation errors fail it with `ActorTemplateCreationFailed`, or leave it `Pending` (`SubstrateUnavailable`) when transient; there is no fallback to the `--template` base template. |
 | `--redis-addr` | `localhost:6379` | Task store, locks and usage store (`ax:usage:{atespace}:{name}`) share this Redis. Empty uses in-memory stores: a single replica for development only. |
 
 Metrics export uses the standard OTel environment variables. When
@@ -55,6 +55,19 @@ BudgetExceeded / Idle conditions are merged at read time (ListTasks does one usa
   `reason=delete` summary. Delete order: summary, then the task record, then
   the usage record. Late events for the deleted task then find no task and are
   dropped.
+- **Router pulls resume suspended actors.** atenet-router (v0.5.0) resumes
+  the target actor on every request and has no opt-out, so a pull of a
+  suspended actor would undo the suspension. That is why only Running tasks
+  with a worker IP are pulled. A sweep works from a task list taken at its
+  start, so right before each router request the puller also re-reads the task
+  (one task-store GET) and skips the pull unless it is still Running on the
+  same worker IP. It also skips it when the usage record's newest actor state
+  event is a closing one (suspending, suspended, crashed, deleting, deleted),
+  which catches a Substrate-side suspension that the task store has not seen
+  yet. Skipped pulls show as `skipped=N` on the `usage puller sweep` log line.
+  SuspendTask's flush runs while the task is still Running, so it is not
+  skipped. The window that remains is milliseconds (between the re-check and
+  the request) plus the ingest latency of state events.
 - Lock order: the task lock may be held while calling the task store and the
   usage store's Get/List/Delete. It is never held while calling usage
   `Update`, the puller, or usage hooks.

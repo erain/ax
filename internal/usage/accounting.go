@@ -365,6 +365,26 @@ func (u *TaskUsage) epochStart(e int64) time.Time {
 	return first
 }
 
+// ActorStopped reports whether the newest recorded actor event says the actor
+// is not running: the last state mark is a closing state (suspending,
+// suspended, crashed, deleting, deleted, reverting) and no usage sample newer
+// than it belongs to an epoch still live (no final sample). False when no
+// state event was recorded.
+func (u *TaskUsage) ActorStopped() bool {
+	st := &u.State
+	n := len(st.Marks)
+	if n == 0 || !isClosingState(st.Marks[n-1].State) {
+		return false
+	}
+	closed := st.Marks[n-1].Time
+	for e, p := range st.LastSample {
+		if p.Time.After(closed) && !st.EpochFinal[e] {
+			return false
+		}
+	}
+	return true
+}
+
 // ActorLastSeen is the time of the newest accepted actor event (state event
 // or usage sample) still recorded; zero if none.
 func (u *TaskUsage) ActorLastSeen() time.Time {
