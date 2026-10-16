@@ -16,8 +16,11 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
+	"math/rand/v2"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -124,16 +127,32 @@ func TestAccounting_ActiveTime(t *testing.T) {
 		approx(t, "day2", u.Day("2026-10-17").ActiveSeconds, 60)
 		approx(t, "lifetime", u.ActiveSeconds, 120)
 	})
-	t.Run("samples accrue open interval", func(t *testing.T) {
+	t.Run("samples extend the activation; close bounded by gap cap", func(t *testing.T) {
+		// Epoch-based active time (T04 fix round): ate.actor.epoch is the
+		// unix-nano activation start, so the epoch's interval runs from the
+		// epoch to its last sample. Previously: same 120 here, but via the
+		// RUNNING-opened interval.
 		u := NewTaskUsage()
+		e := t0.UnixNano()
 		u.ApplyStateChange(StateChange{Time: at(0), State: "ACTOR_STATE_RUNNING"})
-		u.ApplyUsageSample(UsageSample{Time: at(120), Epoch: 1, CPUSeconds: f64(1)}, AccountingConfig{})
+		u.ApplyUsageSample(UsageSample{Time: at(120), Epoch: e, CPUSeconds: f64(1)}, AccountingConfig{})
 		approx(t, "ActiveSeconds after sample", u.ActiveSeconds, 120)
+		// The crash is 180s after the last sample: a close may extend an
+		// activation that has samples only up to last sample + gap cap
+		// (120s). Previously 300: the old rule trusted any close, which is
+		// what made a late/lost close cost the whole gap (verifier D2).
 		u.ApplyStateChange(StateChange{Time: at(300), State: "crashed"})
+		approx(t, "ActiveSeconds", u.ActiveSeconds, 240)
+		// The missing sample arriving late completes the evidence.
+		u.ApplyUsageSample(UsageSample{Time: at(240), Epoch: e, CPUSeconds: f64(2)}, AccountingConfig{})
 		approx(t, "ActiveSeconds", u.ActiveSeconds, 300)
-		// A late sample after close adds no active time.
-		u.ApplyUsageSample(UsageSample{Time: at(310), Epoch: 1, CPUSeconds: f64(1)}, AccountingConfig{})
-		approx(t, "ActiveSeconds", u.ActiveSeconds, 300)
+		// Replays change nothing.
+		before, _ := json.Marshal(u)
+		u.ApplyUsageSample(UsageSample{Time: at(240), Epoch: e, CPUSeconds: f64(2)}, AccountingConfig{})
+		u.ApplyStateChange(StateChange{Time: at(300), State: "crashed"})
+		if after, _ := json.Marshal(u); string(before) != string(after) {
+			t.Errorf("replay changed the record")
+		}
 	})
 	t.Run("sample opens interval when state unknown", func(t *testing.T) {
 		u := NewTaskUsage()
@@ -511,6 +530,9 @@ func TestAccounting_EpochPruning(t *testing.T) {
 // [8,10] added when the late RUNNING extends the covered range back,
 // [130,190] from the sample and [190,200] at close. Before the fix this gave
 // 312s, because reopening at 8s reset the accrual mark and recounted [8,130].
+// (Since the T04 fix round the mechanics are the epoch/state-event interval
+// union, with epoch 1 not a timestamp so the epoch starts at its first sample
+// at 10s; the expected values are unchanged.)
 func TestAccounting_ActiveLateStateEventsNoDoubleCount(t *testing.T) {
 	u := NewTaskUsage()
 	cfg := AccountingConfig{}
@@ -524,7 +546,7 @@ func TestAccounting_ActiveLateStateEventsNoDoubleCount(t *testing.T) {
 	approx(t, "ActiveSeconds", u.ActiveSeconds, 192)
 	approx(t, "day ActiveSeconds", u.Day(DateOf(t0)).ActiveSeconds, 192)
 
-	// A later activation (past the high-water mark) starts a fresh range.
+	// A later activation (state events only) adds its own interval.
 	u.ApplyStateChange(StateChange{Time: at(1000), State: "running"})
 	u.ApplyStateChange(StateChange{Time: at(1100), State: "suspended"})
 	approx(t, "ActiveSeconds after second activation", u.ActiveSeconds, 292)
@@ -561,7 +583,7 @@ func TestAccounting_ZeroDeltaStillAdvancesState(t *testing.T) {
 	if d := u.ApplyStateChange(StateChange{Time: at(0), ActorUID: "a", State: "running"}); !d.IsZero() {
 		t.Fatalf("first RUNNING delta = %+v", d.Sum())
 	}
-	if u.State.ActorUID != "a" || u.State.ActiveSince.IsZero() {
+	if u.State.ActorUID != "a" || len(u.State.Marks) != 1 {
 		t.Errorf("state not advanced: %+v", u.State)
 	}
 	if d := u.ApplyRunnerReport(RunnerReport{Session: "s", ReportTime: at(5)}, at(6)); !d.IsZero() {
@@ -569,5 +591,179 @@ func TestAccounting_ZeroDeltaStillAdvancesState(t *testing.T) {
 	}
 	if u.State.RunnerSession != "s" || !u.State.LastPullTime.Equal(at(6)) {
 		t.Errorf("runner state not advanced: %+v", u.State)
+	}
+}
+
+// input is one accounting input for order-robustness tests.
+type input struct {
+	sample *UsageSample
+	change *StateChange
+}
+
+func smp(sec float64, epochSec float64, cpu float64) input {
+	return input{sample: &UsageSample{Time: at(sec), Epoch: at(epochSec).UnixNano(), CPUSeconds: f64(cpu), WorkingSetBytes: i64(oneGiB)}}
+}
+
+func chg(sec float64, state string) input {
+	return input{change: &StateChange{Time: at(sec), State: state}}
+}
+
+func applyAll(u *TaskUsage, in []input) {
+	for _, x := range in {
+		if x.sample != nil {
+			u.ApplyUsageSample(*x.sample, AccountingConfig{})
+		} else {
+			u.ApplyStateChange(*x.change)
+		}
+	}
+}
+
+// Regression (T04 verifier D2): state events delayed across requests (or
+// lost) must not turn a suspended gap into active time. Active time is
+// derived from epochs (ate.actor.epoch = activation start) and the state
+// events, as a union of intervals, so it does not depend on arrival order.
+func TestAccounting_ActiveOrderRobust(t *testing.T) {
+	t.Run("delayed suspend batch (old: 3660s)", func(t *testing.T) {
+		// Truth: [0,130) + [3610,3670) = 190s.
+		u := NewTaskUsage()
+		applyAll(u, []input{
+			chg(0, "running"), smp(60, 0, 1), smp(120, 0, 2),
+			chg(3600, "resuming"), chg(3610, "running"), smp(3670, 3610, 0.5),
+		})
+		approx(t, "before the delayed batch", u.ActiveSeconds, 180)
+		applyAll(u, []input{chg(130, "suspending"), chg(140, "suspended")})
+		approx(t, "ActiveSeconds", u.ActiveSeconds, 190)
+	})
+	t.Run("delayed running (old: 0s)", func(t *testing.T) {
+		// resuming, samples and suspending applied first; running@5 late.
+		// The epoch starts at 5s: [5,130) = 125s.
+		u := NewTaskUsage()
+		applyAll(u, []input{chg(0, "resuming"), smp(65, 5, 1), smp(125, 5, 2), chg(130, "suspending")})
+		approx(t, "before running", u.ActiveSeconds, 125)
+		applyAll(u, []input{chg(5, "running")})
+		approx(t, "ActiveSeconds", u.ActiveSeconds, 125)
+	})
+	t.Run("lost close (old: 86400s)", func(t *testing.T) {
+		// The suspend events of the first activation are never delivered;
+		// the next activation starts a day later. The first activation is
+		// bounded by its last sample.
+		u := NewTaskUsage()
+		applyAll(u, []input{
+			chg(0, "running"), smp(60, 0, 1), smp(120, 0, 2),
+			chg(86400, "resuming"), chg(86410, "running"), smp(86470, 86410, 1),
+		})
+		approx(t, "ActiveSeconds", u.ActiveSeconds, 180)
+		approx(t, "day 1", u.Day("2026-10-16").ActiveSeconds, 120)
+		approx(t, "day 2", u.Day("2026-10-17").ActiveSeconds, 60)
+	})
+	t.Run("same total in any arrival order", func(t *testing.T) {
+		// Two activations with realistic events: suspended(create),
+		// resuming, epoch 0.3s before running, samples every 60s, final
+		// sample just after suspending, then a crash in the second one.
+		events := []input{
+			chg(-10, "suspended"), chg(-3, "resuming"),
+			smp(0.5, 0, 0.1), chg(0.3, "running"), smp(60.5, 0, 1), smp(120.5, 0, 2),
+			chg(150, "suspending"), smp(150.1, 0, 2.1), chg(150.5, "suspended"),
+			chg(997, "resuming"), smp(1000.5, 1000, 0.1), chg(1000.3, "running"),
+			smp(1060.5, 1000, 1), chg(1100, "crashed"),
+		}
+		// Truth: [0,150.1) + [1000,1100) = 250.1s.
+		const want = 250.1
+		ref := NewTaskUsage()
+		applyAll(ref, events)
+		approx(t, "in order", ref.ActiveSeconds, want)
+		// Model of the pipeline: the lifecycle stream (ateapi) is ordered
+		// (never sampled; single collector consumer), the usage stream
+		// (ateoms) arrives in any order, and the two interleave arbitrarily;
+		// plus a full replay. The result is exact for every interleaving.
+		var states, samples []input
+		for _, x := range events {
+			if x.change != nil {
+				states = append(states, x)
+			} else {
+				samples = append(samples, x)
+			}
+		}
+		rng := rand.New(rand.NewPCG(1, 2))
+		for i := range 500 {
+			smps := slices.Clone(samples)
+			rng.Shuffle(len(smps), func(a, b int) { smps[a], smps[b] = smps[b], smps[a] })
+			perm := make([]input, 0, len(events))
+			si, pi := 0, 0
+			for si < len(states) || pi < len(smps) {
+				if pi == len(smps) || (si < len(states) && rng.IntN(2) == 0) {
+					perm = append(perm, states[si])
+					si++
+				} else {
+					perm = append(perm, smps[pi])
+					pi++
+				}
+			}
+			u := NewTaskUsage()
+			applyAll(u, perm)
+			approx(t, fmt.Sprintf("order %d", i), u.ActiveSeconds, want)
+			before, _ := json.Marshal(u)
+			applyAll(u, perm)
+			if after, _ := json.Marshal(u); string(before) != string(after) {
+				t.Fatalf("order %d: replay changed the record", i)
+			}
+		}
+		// Fully reversed (state events reordered too): bounded error only.
+		// suspended@150.5 arrives before suspending@150 and is paired with
+		// running@0.3 first; the later, earlier close cannot take the 0.4s
+		// back. The samples cap such an error at last sample + gap cap.
+		rev := slices.Clone(events)
+		slices.Reverse(rev)
+		u := NewTaskUsage()
+		applyAll(u, rev)
+		approx(t, "reversed", u.ActiveSeconds, want+0.4)
+	})
+}
+
+// Real Substrate v0.5.0 sequence (ax-finops-poc, Cloud Logging, actor
+// ate-demo-counter/finops-verify-1, 2026-10-16). The epoch (11:20:21.509) is
+// 0.28s before the running event (11:20:21.794) and 3s after resuming: it is
+// the activation start. The final sample is read 1.4ms after suspending.
+// Active = final sample − epoch = 78.135262527s in any arrival order.
+func TestAccounting_RealSubstrateSequence(t *testing.T) {
+	const epoch = int64(1792149621509495056)
+	ts := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	sample := func(at string, cpu float64, kind string) input {
+		return input{sample: &UsageSample{Time: ts(at), Epoch: epoch, Kind: kind, CPUSeconds: f64(cpu), ActorUID: "4646e3d8"}}
+	}
+	state := func(at, s string) input {
+		return input{change: &StateChange{Time: ts(at), State: s, ActorUID: "4646e3d8"}}
+	}
+	events := []input{
+		state("2026-10-16T11:20:05.058169370Z", "suspended"),
+		state("2026-10-16T11:20:18.474247350Z", "resuming"),
+		sample("2026-10-16T11:20:21.789791003Z", 0.110199, "initial"),
+		state("2026-10-16T11:20:21.793839900Z", "running"),
+		sample("2026-10-16T11:20:38.108054460Z", 0.129692, "periodic"),
+		sample("2026-10-16T11:21:38.107446030Z", 0.159077, "periodic"),
+		state("2026-10-16T11:21:39.643338537Z", "suspending"),
+		sample("2026-10-16T11:21:39.644757583Z", 0.159177, "final"),
+		state("2026-10-16T11:21:40.011167468Z", "suspended"),
+		state("2026-10-16T11:22:26.298139124Z", "deleting"),
+		state("2026-10-16T11:22:26.527551372Z", "deleted"),
+	}
+	for _, order := range []string{"in order", "reversed"} {
+		ev := slices.Clone(events)
+		if order == "reversed" {
+			slices.Reverse(ev)
+		}
+		u := NewTaskUsage()
+		applyAll(u, ev)
+		approx(t, order+" ActiveSeconds", u.ActiveSeconds, 78.135262527)
+		approx(t, order+" CPUSeconds", u.CPUSeconds, 0.159177)
+		if u.State.State != "deleted" {
+			t.Errorf("%s: State = %q", order, u.State.State)
+		}
 	}
 }

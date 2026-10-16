@@ -1,0 +1,1561 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "ateapi"
+      }
+     },
+     {
+      "key": "k8s.namespace.name",
+      "value": {
+       "stringValue": "ate-system"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "github.com/agent-substrate/substrate/internal/actorevent"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1792144800000000000",
+       "observedTimeUnixNano": "1792144800000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed",
+       "traceId": "5b8efff798038103d269b633813fc60c",
+       "spanId": "eee19b7ec3c1b174",
+       "flags": 1
+      },
+      {
+       "timeUnixNano": "1792144990000000000",
+       "observedTimeUnixNano": "1792144990000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspending"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792145000000000000",
+       "observedTimeUnixNano": "1792145000000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792145400000000000",
+       "observedTimeUnixNano": "1792145400000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1792145500000000000",
+       "observedTimeUnixNano": "1792145500000000000",
+       "severityNumber": 17,
+       "body": {
+        "stringValue": "Actor crashed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "crashed"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1792144800000000000",
+       "observedTimeUnixNano": "1792144800000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t2"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "7d2e9a44-5b0c-4f1e-8e3a-6c9b1d0f2e77"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "create"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792144800000000000",
+       "observedTimeUnixNano": "1792144800000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "not-a-task"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "ffffffff-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "ateom-gvisor"
+      }
+     },
+     {
+      "key": "k8s.namespace.name",
+      "value": {
+       "stringValue": "ate-system"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "github.com/agent-substrate/substrate/internal/actorevent"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1792144803000000000",
+       "observedTimeUnixNano": "1792144803000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "unspecified"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144805000000000",
+       "observedTimeUnixNano": "1792144805000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.5
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144985000000000",
+       "observedTimeUnixNano": "1792144985000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 61.0
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144865000000000",
+       "observedTimeUnixNano": "1792144865000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 30.5
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144925000000000",
+       "observedTimeUnixNano": "1792144925000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 60.5
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792145200000000000",
+       "observedTimeUnixNano": "1792145200000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "ffffffff-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 999.0
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792145405000000000",
+       "observedTimeUnixNano": "1792145405000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792145398000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "545259520"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "536870912"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.2
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "553648128"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1792145465000000000",
+       "observedTimeUnixNano": "1792145465000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792145398000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "545259520"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "536870912"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 1.2
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "553648128"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1792144810000000000",
+       "observedTimeUnixNano": "1792144810000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t2"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "7d2e9a44-5b0c-4f1e-8e3a-6c9b1d0f2e77"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "big-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144805000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "2155872256"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "2147483648"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 1.0
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "2164260864"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144870000000000",
+       "observedTimeUnixNano": "1792144870000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t2"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "7d2e9a44-5b0c-4f1e-8e3a-6c9b1d0f2e77"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "team-a"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "big-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144805000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "2155872256"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "2147483648"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 4.0
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "2164260864"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792144830000000000",
+       "observedTimeUnixNano": "1792144830000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "not-a-task"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "ffffffff-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792144798000000000"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "1082130432"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "1073741824"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 50.0
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "1090519040"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      }
+     ]
+    },
+    {
+     "scope": {
+      "name": "ateom"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1792144801000000000",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Sandbox has no processes left while the actor is hosted"
+       },
+       "attributes": [
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0b6c1f0e-3d1a-4c55-9a7e-2f1d8c4b9a01"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "ax-task-tmpl"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
