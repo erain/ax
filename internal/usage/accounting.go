@@ -15,6 +15,7 @@
 package usage
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
@@ -158,9 +159,9 @@ const maxEpochs = 8
 // at cfg.SampleGapCap and the interval split at UTC midnight; the cpu
 // increment is spread over the same interval. An interval is idle when the
 // command has exited, or for the part after a low-cpu streak (rate below
-// cfg.IdleCPUThreshold) has lasted cfg.IdleAfter. A sample while the actor
-// state is still unknown opens an active interval at the sample time; an open
-// active interval is accrued up to the sample time.
+// cfg.IdleCPUThreshold) has lasted cfg.IdleAfter. Active time is derived
+// from epochs and state events (see reconcileActive); the sample extends its
+// epoch's activation interval.
 //
 // Persist the record after every Apply* call, even when the returned Delta is
 // zero: the call may still have advanced accounting state (last sample per
@@ -194,11 +195,7 @@ func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta 
 		st.IdleStreakStart = time.Time{}
 	}
 
-	// Active time.
-	if st.State == "" && st.ActiveSince.IsZero() {
-		u.openActive(&d, s.Time)
-	}
-	u.accrueActive(&d, s.Time)
+	st.SampleGapCap = cfg.SampleGapCap
 
 	// CPU: max per epoch.
 	var cpuInc float64
@@ -264,7 +261,20 @@ func (u *TaskUsage) ApplyUsageSample(s UsageSample, cfg AccountingConfig) Delta 
 	if !hasPrev || s.Time.After(prev.Time) {
 		st.LastSample[s.Epoch] = SamplePoint{Time: s.Time, CPUSeconds: s.CPUSeconds, WorkingSetBytes: s.WorkingSetBytes}
 	}
+	if st.EpochFirstSample == nil {
+		st.EpochFirstSample = map[int64]time.Time{}
+	}
+	if first, ok := st.EpochFirstSample[s.Epoch]; !ok || s.Time.Before(first) {
+		st.EpochFirstSample[s.Epoch] = s.Time
+	}
+	if s.Kind == "final" {
+		if st.EpochFinal == nil {
+			st.EpochFinal = map[int64]bool{}
+		}
+		st.EpochFinal[s.Epoch] = true
+	}
 	u.pruneEpochs()
+	u.reconcileActive(&d)
 	u.touch(s.Time)
 	u.commit(&d)
 	return d
@@ -288,6 +298,8 @@ func (u *TaskUsage) pruneEpochs() {
 		}
 		delete(st.EpochMaxCPU, oldest)
 		delete(st.LastSample, oldest)
+		delete(st.EpochFirstSample, oldest)
+		delete(st.EpochFinal, oldest)
 		if oldest > st.EpochFloor {
 			st.EpochFloor = oldest
 		}
@@ -306,43 +318,260 @@ func workingSetGiB(a, b *int64) float64 {
 	return 0
 }
 
-// accrueActive accounts the open active interval up to t.
-func (u *TaskUsage) accrueActive(d *Delta, t time.Time) {
-	st := &u.State
-	if st.ActiveSince.IsZero() || !t.After(st.ActiveAccruedTo) {
-		return
+// Active-time derivation limits.
+const (
+	// maxStateMarks bounds the recorded state events.
+	maxStateMarks = 32
+	// maxActiveSpans bounds the recorded covered ranges.
+	maxActiveSpans = 64
+	// minEpochUnixNano: smaller epoch values are not treated as unix-nano
+	// activation start times (2001-09-09).
+	minEpochUnixNano = int64(1e18)
+	// epochStartSkew tolerates clock skew between the epoch value and the
+	// sample timestamps.
+	epochStartSkew = 5 * time.Second
+	// An epoch belongs to the RUNNING event at R when its start lies in
+	// [R-runningMatchBefore, R+runningMatchAfter]. In Substrate v0.5.0 the
+	// epoch precedes the running commit by well under a second; a fallback
+	// start (first sample) can be up to one sample period after it.
+	runningMatchBefore = 60 * time.Second
+	runningMatchAfter  = 65 * time.Second
+)
+
+// isClosingState reports whether state ends an activation.
+func isClosingState(state string) bool {
+	switch state {
+	case "suspending", StateSuspended, StateCrashed, "deleting", "deleted", "reverting":
+		return true
 	}
-	forEachDay(st.ActiveAccruedTo, t, func(date string, from, to time.Time) {
-		d.day(date).ActiveSeconds += to.Sub(from).Seconds()
-	})
-	st.ActiveAccruedTo = t
+	return false
 }
 
-// openActive opens the active interval at r. If r is past the high-water
-// mark a new covered range starts at r; otherwise only the part of
-// [r, ActiveCoveredFrom) not yet accounted is added (a late RUNNING event for
-// an interval that samples already accounted).
-func (u *TaskUsage) openActive(d *Delta, r time.Time) {
+// epochStart is the activation start of epoch e: the epoch value itself
+// (Substrate's ate.actor.epoch is the unix-nano time the activation began)
+// when it is a plausible timestamp not later than the epoch's first sample,
+// else the epoch's first sample time.
+func (u *TaskUsage) epochStart(e int64) time.Time {
 	st := &u.State
-	if st.ActiveAccruedTo.IsZero() || r.After(st.ActiveAccruedTo) {
-		st.ActiveCoveredFrom, st.ActiveAccruedTo = r, r
-	} else {
-		u.extendActiveBack(d, r)
+	first, ok := st.EpochFirstSample[e]
+	if !ok {
+		first = st.LastSample[e].Time
 	}
-	st.ActiveSince = r
+	if e >= minEpochUnixNano {
+		if start := time.Unix(0, e).UTC(); !start.After(first.Add(epochStartSkew)) {
+			return start
+		}
+	}
+	return first
 }
 
-// extendActiveBack accounts [r, ActiveCoveredFrom) when r is earlier than the
-// covered range.
-func (u *TaskUsage) extendActiveBack(d *Delta, r time.Time) {
+// ActorLastSeen is the time of the newest accepted actor event (state event
+// or usage sample) still recorded; zero if none.
+func (u *TaskUsage) ActorLastSeen() time.Time {
+	var t time.Time
+	if n := len(u.State.Marks); n > 0 {
+		t = u.State.Marks[n-1].Time
+	}
+	for _, p := range u.State.LastSample {
+		if p.Time.After(t) {
+			t = p.Time
+		}
+	}
+	return t
+}
+
+// reconcileActive adds to d (and to the covered spans) every part of the
+// activation intervals implied by the recorded epochs and state events that
+// is not covered yet. Active time is the measure of the union of:
+//
+//   - per epoch E with samples: [start_E, end_E) where end_E = last sample of
+//     E if E's "final" sample was seen (the ateom tore the activation down),
+//     else max(last sample of E, min(first closing state event in [start_E,
+//     start of the next epoch), last sample of E + gap cap)) (crash, lost
+//     worker: no final sample);
+//   - per RUNNING event R: [R, next state event) when that event closes the
+//     activation (suspending, suspended, crashed, deleting, deleted,
+//     reverting), else (still open, or the close is missing/late) [R, last
+//     sample of the epochs belonging to R). When epochs belong to R, the end
+//     is capped at their last sample (+ gap cap unless they all have a final
+//     sample), and it never extends past the start of a later epoch.
+//
+// Intervals only grow as inputs arrive and coverage is a union, so the
+// result is idempotent and independent of arrival order up to the bounded
+// error of a close paired before its real predecessor arrived (≤ gap cap
+// when samples exist). A lost or late close costs at most one gap cap.
+func (u *TaskUsage) reconcileActive(d *Delta) {
 	st := &u.State
-	if st.ActiveCoveredFrom.IsZero() || !r.Before(st.ActiveCoveredFrom) {
+	gapCap := st.SampleGapCap
+	if gapCap <= 0 {
+		gapCap = DefaultSampleGapCap
+	}
+	type epochSpan struct {
+		start, last time.Time
+		final       bool
+	}
+	epochs := make([]epochSpan, 0, len(st.LastSample))
+	for e, p := range st.LastSample {
+		epochs = append(epochs, epochSpan{start: u.epochStart(e), last: p.Time, final: st.EpochFinal[e]})
+	}
+	slices.SortFunc(epochs, func(a, b epochSpan) int { return a.start.Compare(b.start) })
+
+	for i, ep := range epochs {
+		var next time.Time
+		for _, o := range epochs[i+1:] {
+			if o.start.After(ep.start) {
+				next = o.start
+				break
+			}
+		}
+		end := ep.last
+		for _, m := range st.Marks {
+			if ep.final {
+				break
+			}
+			if m.Time.Before(ep.start) || !isClosingState(m.State) {
+				continue
+			}
+			if !next.IsZero() && !m.Time.Before(next) {
+				break
+			}
+			ce := m.Time
+			if lim := ep.last.Add(gapCap); ce.After(lim) {
+				ce = lim
+			}
+			if ce.After(end) {
+				end = ce
+			}
+			break
+		}
+		u.cover(d, ep.start, end)
+	}
+
+	for i, m := range st.Marks {
+		if m.State != StateRunning {
+			continue
+		}
+		var lastEv time.Time
+		belongs, final := false, true
+		for _, ep := range epochs {
+			if !ep.start.Before(m.Time.Add(-runningMatchBefore)) && !ep.start.After(m.Time.Add(runningMatchAfter)) {
+				belongs = true
+				final = final && ep.final
+				if ep.last.After(lastEv) {
+					lastEv = ep.last
+				}
+			}
+		}
+		var end time.Time
+		switch {
+		case i+1 < len(st.Marks) && isClosingState(st.Marks[i+1].State):
+			end = st.Marks[i+1].Time
+			lim := lastEv.Add(gapCap)
+			if final {
+				lim = lastEv
+			}
+			if belongs && end.After(lim) {
+				end = lim
+			}
+			// A later activation's epoch inside [R, close) proves the close
+			// belongs to it (this activation's own close has not arrived).
+			for _, ep := range epochs {
+				if ep.start.After(m.Time.Add(runningMatchAfter)) && ep.start.Before(end) {
+					end = ep.start
+					break
+				}
+			}
+		case belongs:
+			end = lastEv
+		default:
+			continue
+		}
+		u.cover(d, m.Time, end)
+	}
+}
+
+// cover adds the part of [from, to) not yet covered to d (split at UTC
+// midnight) and merges [from, to) into the covered spans.
+func (u *TaskUsage) cover(d *Delta, from, to time.Time) {
+	st := &u.State
+	if from.Before(st.ActiveFloor) {
+		from = st.ActiveFloor
+	}
+	if !to.After(from) {
 		return
 	}
-	forEachDay(r, st.ActiveCoveredFrom, func(date string, from, to time.Time) {
-		d.day(date).ActiveSeconds += to.Sub(from).Seconds()
-	})
-	st.ActiveCoveredFrom = r
+	from, to = from.UTC(), to.UTC()
+	added := false
+	add := func(a, b time.Time) {
+		added = true
+		forEachDay(a, b, func(date string, x, y time.Time) {
+			d.day(date).ActiveSeconds += y.Sub(x).Seconds()
+		})
+	}
+	cur := from
+	for _, s := range st.ActiveSpans {
+		if !s.To.After(cur) {
+			continue
+		}
+		if !s.From.Before(to) {
+			break
+		}
+		if s.From.After(cur) {
+			add(cur, s.From)
+		}
+		if s.To.After(cur) {
+			cur = s.To
+		}
+		if !cur.Before(to) {
+			break
+		}
+	}
+	if cur.Before(to) {
+		add(cur, to)
+	}
+	if !added {
+		return
+	}
+
+	spans := append(st.ActiveSpans, Span{From: from, To: to})
+	slices.SortFunc(spans, func(a, b Span) int { return a.From.Compare(b.From) })
+	merged := spans[:1]
+	for _, s := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if !s.From.After(last.To) {
+			if s.To.After(last.To) {
+				last.To = s.To
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+	for len(merged) > maxActiveSpans {
+		st.ActiveFloor = merged[0].To
+		merged = merged[1:]
+	}
+	st.ActiveSpans = merged
+}
+
+// addMark records a state event; it reports false for a replay or an event
+// older than every kept mark when the list is full.
+func (u *TaskUsage) addMark(t time.Time, state string) bool {
+	st := &u.State
+	t = t.UTC()
+	i, _ := slices.BinarySearchFunc(st.Marks, t, func(m StateMark, t time.Time) int { return m.Time.Compare(t) })
+	for j := i; j < len(st.Marks) && st.Marks[j].Time.Equal(t); j++ {
+		if st.Marks[j].State == state {
+			return false
+		}
+	}
+	if len(st.Marks) >= maxStateMarks && i == 0 {
+		return false
+	}
+	st.Marks = slices.Insert(st.Marks, i, StateMark{Time: t, State: state})
+	if n := len(st.Marks) - maxStateMarks; n > 0 {
+		st.Marks = slices.Delete(st.Marks, 0, n)
+	}
+	return true
 }
 
 // accrueStorage accounts WorkspaceBytes × Δt since the last accrual up to t.
@@ -365,13 +594,14 @@ func (u *TaskUsage) accrueStorage(d *Delta, t time.Time) {
 }
 
 // ApplyStateChange folds one actor state event into u and returns the
-// increment. "running" opens an active interval; any other state closes it.
-// Events not newer than the last applied state event are ignored (replays,
-// reordering). Storage is accrued up to the event time.
+// increment. The event is recorded (replays are ignored) and active time is
+// re-derived order-independently (see reconcileActive), so a late event still
+// counts. State/StateTime track the newest event; storage accrues and a
+// closing state resets the low-cpu streak only for an event newer than it.
 //
 // Persist the record after every Apply* call, even when the returned Delta is
 // zero: the call may still have advanced accounting state (last sample per
-// epoch, open interval, actor uid, runner session/baseline, LastPullTime,
+// epoch, state marks, actor uid, runner session/baseline, LastPullTime,
 // WorkspaceBytes, CommandExited). Do not return ErrNoChange based on
 // Delta.IsZero().
 func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
@@ -380,30 +610,18 @@ func (u *TaskUsage) ApplyStateChange(e StateChange) Delta {
 	if e.Time.IsZero() || state == "" || !u.acceptUID(e.ActorUID) {
 		return d
 	}
-	st := &u.State
-	if !st.StateTime.IsZero() && !e.Time.After(st.StateTime) {
+	if !u.addMark(e.Time, state) {
 		return d
 	}
-	u.accrueStorage(&d, e.Time)
-	if state == StateRunning {
-		if st.ActiveSince.IsZero() {
-			u.openActive(&d, e.Time)
-		} else {
-			// Already open (e.g. by a sample before any state event): extend
-			// back to the real start if earlier, else accrue up to e.Time.
-			u.extendActiveBack(&d, e.Time)
-			if e.Time.Before(st.ActiveSince) {
-				st.ActiveSince = e.Time
-			}
-			u.accrueActive(&d, e.Time)
+	st := &u.State
+	if st.StateTime.IsZero() || e.Time.After(st.StateTime) {
+		u.accrueStorage(&d, e.Time)
+		if state != StateRunning {
+			st.IdleStreakStart = time.Time{}
 		}
-	} else {
-		u.accrueActive(&d, e.Time)
-		// Close; ActiveCoveredFrom/ActiveAccruedTo stay as the high-water mark.
-		st.ActiveSince = time.Time{}
-		st.IdleStreakStart = time.Time{}
+		st.State, st.StateTime = state, e.Time
 	}
-	st.State, st.StateTime = state, e.Time
+	u.reconcileActive(&d)
 	u.touch(e.Time)
 	u.commit(&d)
 	return d

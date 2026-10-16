@@ -60,6 +60,11 @@ import (
 // MaxBodyBytes bounds the (decompressed) request body.
 const MaxBodyBytes = 8 << 20
 
+// CreationSkew is how much earlier than the task's creation timestamp an
+// event may be and still be attributed to the task (clock skew between
+// ax-server and Substrate).
+const CreationSkew = 2 * time.Second
+
 // Event names (LogRecord event_name) and their body-text fallbacks.
 const (
 	EventUsageSampled = "ate.actor.usage_sampled"
@@ -149,6 +154,8 @@ type Stats struct {
 	Events  int // ate.actor.* events decoded
 	NoTask  int // events dropped because no AX task matches the actor
 	UIDSkip int // events dropped because the task records a different actor uid
+	Stale   int // events dropped because they predate the task's creation
+	Resets  int // usage records reset because a newer actor replaced the recorded one
 	Tasks   int // task usage records updated
 	Deltas  int // non-empty deltas recorded (= Hooks calls)
 }
@@ -174,10 +181,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body io.Reader = r.Body
+	raw := &io.LimitedReader{R: r.Body, N: MaxBodyBytes + 1}
 	switch enc := r.Header.Get("Content-Encoding"); enc {
 	case "", "identity":
 	case "gzip":
-		gz, err := gzip.NewReader(io.LimitReader(r.Body, MaxBodyBytes+1))
+		gz, err := gzip.NewReader(raw)
 		if err != nil {
 			http.Error(w, "invalid gzip body", http.StatusBadRequest)
 			return
@@ -189,6 +197,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(body, MaxBodyBytes+1))
+	if err != nil && raw.N <= 0 {
+		// The compressed body itself exceeded the limit.
+		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if err != nil {
 		http.Error(w, "reading body: "+err.Error(), http.StatusBadRequest)
 		return
@@ -217,7 +230,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.opts.Logger.DebugContext(r.Context(), "usage ingest",
 		"records", st.Records, "events", st.Events, "noTask", st.NoTask,
-		"uidSkip", st.UIDSkip, "tasks", st.Tasks, "deltas", st.Deltas)
+		"uidSkip", st.UIDSkip, "stale", st.Stale, "resets", st.Resets, "tasks", st.Tasks, "deltas", st.Deltas)
 
 	var out []byte
 	if jsonBody {
@@ -278,20 +291,35 @@ func (h *Handler) Ingest(ctx context.Context, req *collogspb.ExportLogsServiceRe
 			errs = append(errs, fmt.Errorf("looking up task %s/%s: %w", ref.atespace, ref.name, err))
 			continue
 		}
-		if uid := task.GetStatus().GetActorUid(); uid != "" {
+		// A task re-created with the same name maps to the same actor name:
+		// events of the previous actor (its late deleting/deleted events, a
+		// final sample) predate the new task and must not be attributed to
+		// it (they would pin the record to the old actor uid).
+		if ct := task.GetMetadata().GetCreationTimestamp(); ct != nil && ct.IsValid() {
+			notBefore := ct.AsTime().Add(-CreationSkew)
 			events = slices.DeleteFunc(events, func(ev event) bool {
-				if evUID := ev.uid(); evUID != "" && evUID != uid {
+				if ev.time.Before(notBefore) {
+					st.Stale++
+					return true
+				}
+				return false
+			})
+		}
+		taskUID := task.GetStatus().GetActorUid()
+		if taskUID != "" {
+			events = slices.DeleteFunc(events, func(ev event) bool {
+				if evUID := ev.uid(); evUID != "" && evUID != taskUID {
 					st.UIDSkip++
 					return true
 				}
 				return false
 			})
-			if len(events) == 0 {
-				continue
-			}
 		}
-		// Apply in timestamp order (state events not newer than the last
-		// recorded one are dropped by the accounting).
+		if len(events) == 0 {
+			continue
+		}
+		// Apply in timestamp order (cheaper and exact for the per-epoch
+		// sample integration; the accounting is order-robust regardless).
 		slices.SortStableFunc(events, func(a, b event) int { return a.time.Compare(b.time) })
 
 		atespace := task.GetMetadata().GetAtespace()
@@ -299,7 +327,8 @@ func (h *Handler) Ingest(ctx context.Context, req *collogspb.ExportLogsServiceRe
 			atespace = ref.atespace
 		}
 		key := usage.Key{Atespace: atespace, Name: task.GetMetadata().GetName()}
-		recorded, err := h.apply(ctx, key, events, cfg)
+		recorded, resets, err := h.apply(ctx, key, taskUID, events, cfg)
+		st.Resets += resets
 		if err != nil {
 			errs = append(errs, fmt.Errorf("updating usage of %s/%s: %w", key.Atespace, key.Name, err))
 			continue
@@ -314,21 +343,45 @@ func (h *Handler) Ingest(ctx context.Context, req *collogspb.ExportLogsServiceRe
 
 // apply folds events into the usage record of key, prices the combined delta,
 // and calls Hooks when it is non-empty. It reports whether a non-empty delta
-// was recorded.
-func (h *Handler) apply(ctx context.Context, key usage.Key, events []event, cfg usage.AccountingConfig) (bool, error) {
+// was recorded and how many times the record was reset for a new actor.
+//
+// Actor replacement (task deleted and re-created with the same name): the
+// record is reset to a fresh TaskUsage when
+//   - taskUID (task.status.actorUid) is set and the record holds another uid;
+//   - taskUID is unknown and an event carries a uid other than the recorded
+//     one, is newer than every recorded event of the recorded actor, and
+//     either is the new actor's creation (state event with operation
+//     "create") or the recorded actor is gone (last state deleting/deleted).
+//     Substrate deletes the old actor before it creates the new one with the
+//     same name, so such an event belongs to the newer actor; a late event of
+//     an old actor is older and stays rejected by the uid guard, and a stray
+//     foreign event cannot flip the record of a live actor.
+func (h *Handler) apply(ctx context.Context, key usage.Key, taskUID string, events []event, cfg usage.AccountingConfig) (bool, int, error) {
 	var (
-		delta usage.Delta
-		cost  usage.Cost
-		snap  *usage.TaskUsage
+		delta  usage.Delta
+		cost   usage.Cost
+		snap   *usage.TaskUsage
+		resets int
 	)
 	err := h.opts.Store.Update(ctx, key, func(u *usage.TaskUsage) error {
 		// fn may be retried: (re)assign every captured result.
-		delta, cost, snap = usage.Delta{}, usage.Cost{}, nil
+		delta, cost, snap, resets = usage.Delta{}, usage.Cost{}, nil, 0
 		before, err := json.Marshal(u)
 		if err != nil {
 			return err
 		}
+		reset := func() {
+			*u = *usage.NewTaskUsage()
+			delta = usage.Delta{}
+			resets++
+		}
+		if rec := u.State.ActorUID; taskUID != "" && rec != "" && rec != taskUID {
+			reset()
+		}
 		for _, ev := range events {
+			if taskUID == "" && replacesActor(u, ev) {
+				reset()
+			}
 			switch ev.name {
 			case EventUsageSampled:
 				delta.Add(u.ApplyUsageSample(ev.sample, cfg))
@@ -351,15 +404,32 @@ func (h *Handler) apply(ctx context.Context, key usage.Key, events []event, cfg 
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if delta.IsZero() {
-		return false, nil
+		return false, resets, nil
 	}
 	if h.opts.Hooks != nil && snap != nil {
 		h.opts.Hooks.OnDelta(ctx, key, delta, cost, snap)
 	}
-	return true, nil
+	return true, resets, nil
+}
+
+// replacesActor reports whether ev comes from an actor that replaced the one
+// recorded in u (see apply).
+func replacesActor(u *usage.TaskUsage, ev event) bool {
+	uid, rec := ev.uid(), u.State.ActorUID
+	if uid == "" || rec == "" || uid == rec || !ev.time.After(u.ActorLastSeen()) {
+		return false
+	}
+	if ev.name != EventUsageSampled && ev.change.Operation == "create" {
+		return true
+	}
+	switch u.State.State {
+	case "deleting", "deleted":
+		return true
+	}
+	return false
 }
 
 func (ev event) uid() string {

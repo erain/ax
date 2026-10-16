@@ -35,6 +35,7 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/google/ax/internal/store"
 	"github.com/google/ax/internal/usage"
@@ -171,12 +172,18 @@ type wantUsage struct {
 // the test for the derivation).
 var fixtureWant = []wantUsage{
 	{
-		// t1: RUNNING 10:00:00 → SUSPENDING 10:03:10 (190s) and RUNNING
-		// 10:10:00 → crashed 10:11:40 (100s, body-only records).
+		// t1: epoch E1 = 09:59:58 (2s before RUNNING commits) → final sample
+		// 10:03:05 (187s) and epoch E2 = 10:09:58 → crashed 10:11:40 (102s,
+		// body-only records). Active time is epoch-based: the activation
+		// starts at ate.actor.epoch (real data: ~0.3s before the running
+		// event) and ends at the final sample (written at teardown; real
+		// data: 1.4ms after suspending), or for a crash (no final sample) at
+		// the crash event; so 289 rather than the 290 the RUNNING/SUSPENDING
+		// events alone give (this synthetic final precedes SUSPENDING by 5s).
 		// CPU = max(epoch1)=61.0 + max(epoch2)=1.2.
 		// Memory = 1 GiB × (2s after the pending sample + 3×60s) + 0.5 GiB × 60s.
 		// The uid-mismatch sample (cpu 999) is ignored.
-		key: usage.Key{Atespace: "default", Name: "t1"}, active: 290, cpu: 62.2, mem: 212, idle: 0,
+		key: usage.Key{Atespace: "default", Name: "t1"}, active: 289, cpu: 62.2, mem: 212, idle: 0,
 		cost: 62.2*0.001 + 212*0.0001, uid: uidT1, pool: "ax-pool", state: "crashed",
 	},
 	{
@@ -275,9 +282,17 @@ func TestGoldenFixture(t *testing.T) {
 	}
 }
 
-// Records split across requests (one per record, in fixture order) give the
-// same totals as one batch, except for the state events that arrive out of
-// order (the batch sorts them); the fixture's t2 has none, so check t2.
+// Records split across requests (one per record, in fixture order: all
+// ateapi state events first, then the ateom samples with t1's final@185
+// before periodic@65/@125) give the same totals as one batch, except for one
+// bounded loss: a sample older than the newest one of its epoch adds its cpu
+// but no memory (the interval was already integrated from the previous newer
+// sample), so t1 memory is 152 instead of 212 GiB·s (lost: 60 GiB·s, at most
+// one gap cap per reordered sample). CPU is order-independent. Active time
+// differs by a bounded amount: the state events arrive before any sample, so
+// [running@0, suspending@190) is counted from the state events alone, and the
+// later final sample (synthetic: 5s before suspending) cannot take the 5s
+// back; t1 active is 294 instead of 289 (the batch sees the samples first).
 func TestFixtureRecordByRecord(t *testing.T) {
 	s := usage.NewMemoryStore()
 	h := newTestHandler(s, newFakeTasks(task("default", "t1", ""), task("team-a", "t2", "")), nil)
@@ -295,7 +310,11 @@ func TestFixtureRecordByRecord(t *testing.T) {
 			}
 		}
 	}
-	checkUsage(t, s, fixtureWant[1:])
+	t1 := fixtureWant[0]
+	t1.mem = 152
+	t1.active = 294
+	t1.cost = t1.cpu*0.001 + t1.mem*0.0001
+	checkUsage(t, s, []wantUsage{t1, fixtureWant[1]})
 }
 
 // Acceptance 2: protobuf and JSON (and gzip) accepted; wrong method → 405;
@@ -354,6 +373,11 @@ func TestEncodingsAndErrors(t *testing.T) {
 	zw = gzip.NewWriter(&bigGz)
 	zw.Write(big)
 	zw.Close()
+	// A gzip body that is itself over the limit (stored, incompressible).
+	var hugeGz bytes.Buffer
+	zw, _ = gzip.NewWriterLevel(&hugeGz, gzip.NoCompression)
+	zw.Write(big)
+	zw.Close()
 	for _, tc := range []struct {
 		name, method, ct, enc string
 		body                  []byte
@@ -365,6 +389,7 @@ func TestEncodingsAndErrors(t *testing.T) {
 		{"oversized", http.MethodPost, "application/x-protobuf", "", big, false, http.StatusRequestEntityTooLarge},
 		{"oversized chunked", http.MethodPost, "application/x-protobuf", "", big, true, http.StatusRequestEntityTooLarge},
 		{"oversized after gunzip", http.MethodPost, "application/x-protobuf", "gzip", bigGz.Bytes(), false, http.StatusRequestEntityTooLarge},
+		{"oversized compressed chunked", http.MethodPost, "application/x-protobuf", "gzip", hugeGz.Bytes(), true, http.StatusRequestEntityTooLarge},
 		{"unsupported content type", http.MethodPost, "text/plain", "", pb, false, http.StatusUnsupportedMediaType},
 		{"unsupported encoding", http.MethodPost, "application/x-protobuf", "br", pb, false, http.StatusUnsupportedMediaType},
 		{"bad gzip", http.MethodPost, "application/x-protobuf", "gzip", pb, false, http.StatusBadRequest},
@@ -665,4 +690,94 @@ func mustMarshal(t *testing.T, m proto.Message) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// Regression (verifier D1): a task deleted and re-created with the same name
+// must not stay pinned to the previous actor's uid. Verifier sequence: OLD
+// "deleted"@10s arrives, then NEW create/running@20s and a sample.
+func TestTaskRecreatedWithSameName(t *testing.T) {
+	const oldUID, newUID = "uid-old", "uid-new"
+	newEpoch := t0.Add(19 * time.Second).UnixNano()
+	seq := func() *collogspb.ExportLogsServiceRequest {
+		created := stateRec("t", newUID, 12*time.Second, "suspended")
+		created.Attributes[3] = sv(AttrActorOperation, "create")
+		return request(
+			stateRec("t", oldUID, 10*time.Second, "deleted"),
+			created,
+			stateRec("t", newUID, 20*time.Second, "running"),
+			sampleRec("t", newUID, 80*time.Second, newEpoch, 3, 1<<30),
+		)
+	}
+	ts := func(d time.Duration) *timestamppb.Timestamp { return timestamppb.New(t0.Add(d)) }
+	for _, tc := range []struct {
+		name               string
+		created            *timestamppb.Timestamp
+		statusUID          string
+		separate           bool // old event in its own earlier request
+		wantStale, wantRst int
+	}{
+		{name: "creation timestamp drops the old event", created: ts(13 * time.Second), wantStale: 1},
+		{name: "old event within skew, new actor's create replaces it", created: ts(11500 * time.Millisecond), wantRst: 1},
+		{name: "no creation timestamp, new actor's create replaces it", wantRst: 1},
+		{name: "no creation timestamp, separate requests", separate: true, wantRst: 1},
+		{name: "status.actorUid resets a record pinned to the old actor", statusUID: newUID, separate: true, wantRst: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := usage.NewMemoryStore()
+			tk := task("default", "t", tc.statusUID)
+			tk.Metadata.CreationTimestamp = tc.created
+			h := newTestHandler(s, newFakeTasks(tk), nil)
+			ctx := context.Background()
+			req := seq()
+			var stats Stats
+			if tc.separate {
+				recs := req.ResourceLogs[0].ScopeLogs[0].LogRecords
+				// The old actor's record lands first, pinning the uid (with
+				// status.actorUid set, a record written before T08 set it).
+				pin := NewHandler(Options{Store: s, Tasks: newFakeTasks(task("default", "t", "")), Pricer: linearPricer{}})
+				if _, err := pin.Ingest(ctx, request(recs[0])); err != nil {
+					t.Fatal(err)
+				}
+				req = request(recs[1:]...)
+			}
+			stats, err := h.Ingest(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.Stale != tc.wantStale || stats.Resets != tc.wantRst {
+				t.Errorf("stats = %+v, want stale %d resets %d", stats, tc.wantStale, tc.wantRst)
+			}
+			u, err := s.Get(ctx, usage.Key{Atespace: "default", Name: "t"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Epoch 19s → last sample 80s: 61s active; running@20 open → 80.
+			if u.State.ActorUID != newUID || u.CPUSeconds != 3 || !approx(u.ActiveSeconds, 61) {
+				t.Errorf("uid=%q cpu=%v active=%v, want %q 3 61", u.State.ActorUID, u.CPUSeconds, u.ActiveSeconds, newUID)
+			}
+		})
+	}
+
+	// A late final sample of the old actor (older than the new actor's
+	// events) stays rejected, and a stray foreign sample cannot flip a live
+	// actor's record.
+	t.Run("late old sample and stray foreign sample are ignored", func(t *testing.T) {
+		s := usage.NewMemoryStore()
+		h := newTestHandler(s, newFakeTasks(task("default", "t", "")), nil)
+		ctx := context.Background()
+		if _, err := h.Ingest(ctx, seq()); err != nil {
+			t.Fatal(err)
+		}
+		st, err := h.Ingest(ctx, request(
+			sampleRec("t", oldUID, 9*time.Second, t0.UnixNano(), 61, 1<<30),
+			sampleRec("t", "uid-stray", 200*time.Second, t0.UnixNano(), 99, 1<<30),
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _ := s.Get(ctx, usage.Key{Atespace: "default", Name: "t"})
+		if st.Resets != 0 || u.State.ActorUID != newUID || u.CPUSeconds != 3 {
+			t.Errorf("resets=%d uid=%q cpu=%v, want 0 %q 3", st.Resets, u.State.ActorUID, u.CPUSeconds, newUID)
+		}
+	})
 }

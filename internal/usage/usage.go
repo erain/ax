@@ -337,15 +337,26 @@ type AccountingState struct {
 	// empty means unknown (no state event seen yet).
 	State     string    `json:"state,omitempty"`
 	StateTime time.Time `json:"stateTime,omitzero"`
-	// ActiveSince is the start of the open RUNNING interval (zero = closed).
-	ActiveSince time.Time `json:"activeSince,omitzero"`
-	// [ActiveCoveredFrom, ActiveAccruedTo] is the latest contiguous range
-	// already accounted as active. ActiveAccruedTo is a high-water mark: it
-	// survives closing the interval, so late state events whose times fall
-	// inside that range (samples and state events travel separate pipelines
-	// and may arrive in either order) never count the same time twice.
-	ActiveCoveredFrom time.Time `json:"activeCoveredFrom,omitzero"`
-	ActiveAccruedTo   time.Time `json:"activeAccruedTo,omitzero"`
+	// EpochFirstSample is the earliest sample time per epoch (the activation
+	// start when the epoch value is not a plausible unix-nano timestamp).
+	EpochFirstSample map[int64]time.Time `json:"epochFirstSample,omitempty"`
+	// EpochFinal marks epochs whose "final" sample (written by the ateom when
+	// it tears the activation down) was seen: their activation ends at their
+	// last sample, and state events do not extend it.
+	EpochFinal map[int64]bool `json:"epochFinal,omitempty"`
+	// Marks are the most recent actor state events (sorted by time, at most
+	// maxStateMarks), kept so active time can be derived order-independently.
+	Marks []StateMark `json:"marks,omitempty"`
+	// ActiveSpans are the disjoint time ranges already accounted as active
+	// (sorted, at most maxActiveSpans); time before ActiveFloor counts as
+	// covered. Active time only ever adds the not-yet-covered part of an
+	// activation interval, so replays and reordering never double count.
+	ActiveSpans []Span    `json:"activeSpans,omitempty"`
+	ActiveFloor time.Time `json:"activeFloor,omitzero"`
+	// SampleGapCap is the gap cap of the last ApplyUsageSample config; it
+	// also bounds how far a closing state event may extend an activation
+	// past its last sample. Zero = DefaultSampleGapCap.
+	SampleGapCap time.Duration `json:"sampleGapCap,omitempty"`
 	// IdleStreakStart is the start of the current low-cpu streak (zero = none).
 	IdleStreakStart time.Time `json:"idleStreakStart,omitzero"`
 
@@ -366,6 +377,18 @@ type AccountingState struct {
 }
 
 // NewTaskUsage returns an empty usage record.
+// StateMark is one recorded actor state event.
+type StateMark struct {
+	Time  time.Time `json:"t"`
+	State string    `json:"s"`
+}
+
+// Span is a half-open time range [From, To).
+type Span struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+}
+
 func NewTaskUsage() *TaskUsage {
 	return &TaskUsage{Days: map[string]*DayUsage{}}
 }
