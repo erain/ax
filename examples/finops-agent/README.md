@@ -116,4 +116,14 @@ gcloud artifacts docker images describe \
    the task is still suspended.
 4. Watch it: `ax get tasks -l agent=finops-agent`, then compare
    `ax get task finops-agent-otlp -o yaml` (status.usage.tokens) with the
-   `FINOPS_HARNESS_TOTALS` line in the task log.
+   `FINOPS_HARNESS_TOTALS` line in the task log. AX has no `ax logs` command;
+   the harness's stdout is in the actor's container log:
+
+   ```sh
+   kubectl ate --context <ctx> logs actor finops-agent-otlp -a default --source containers \
+     | jq -Rr 'fromjson? | .message // empty' | grep FINOPS_HARNESS_TOTALS
+   ```
+
+   The puller fetches the runner's counters every 60s while the task is
+   Running, so allow about a minute before comparing. Deleting the task deletes
+   the actor and its egress policy.
