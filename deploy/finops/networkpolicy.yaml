@@ -1,0 +1,42 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Substrate isolates worker pods with a NetworkPolicy (substrate-<pool>-*)
+# that admits ingress only from ate-system/atenet-router. ax-server's usage
+# puller calls the task runner directly (GET http://<workerIP>:<runner-port>/usage),
+# so allow ax-server -> worker pods on the runner port. Policies are additive;
+# Substrate's own policy is left untouched.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ax-server-usage-pull
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: ax-server
+    app.kubernetes.io/part-of: ax
+spec:
+  podSelector:
+    matchExpressions:
+      - key: ate.dev/worker-pool
+        operator: Exists
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ax-server
+      ports:
+        - protocol: TCP
+          port: 80
