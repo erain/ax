@@ -20,13 +20,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
@@ -207,5 +211,68 @@ func TestSetupMeterProvider_ErrorReturnsNoop(t *testing.T) {
 	}
 	if otel.GetMeterProvider() != prev {
 		t.Error("global provider must be unchanged on error")
+	}
+}
+
+// TestSetupMeterProvider_PerSeriesStartTimestamps checks that SetupMeterProvider
+// enables the SDK's per-series start timestamps, and that the SDK honours the
+// flag: a series created after the provider reports its own start time. This
+// guards the dependency on an experimental SDK flag across upgrades.
+func TestSetupMeterProvider_PerSeriesStartTimestamps(t *testing.T) {
+	t.Setenv(EnvPerSeriesStartTimestamps, "")
+	if err := os.Unsetenv(EnvPerSeriesStartTimestamps); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvEndpoint, "")
+	t.Setenv(EnvMetricsEndpoint, "")
+	prev := otel.GetMeterProvider()
+	t.Cleanup(func() { otel.SetMeterProvider(prev) })
+	_, shutdown, err := SetupMeterProvider(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = shutdown(context.Background())
+	if got := os.Getenv(EnvPerSeriesStartTimestamps); got != "true" {
+		t.Fatalf("%s = %q, want true", EnvPerSeriesStartTimestamps, got)
+	}
+
+	t.Setenv(EnvPerSeriesStartTimestamps, "false")
+	if _, _, err := SetupMeterProvider(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv(EnvPerSeriesStartTimestamps); got != "false" {
+		t.Fatalf("explicit setting overwritten: %q", got)
+	}
+
+	t.Setenv(EnvPerSeriesStartTimestamps, "true")
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() { _ = mp.Shutdown(context.Background()) }()
+	c, err := mp.Meter("test").Float64Counter("c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Add(context.Background(), 1, metric.WithAttributes(attribute.String("k", "first")))
+	time.Sleep(20 * time.Millisecond)
+	c.Add(context.Background(), 1, metric.WithAttributes(attribute.String("k", "second")))
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	starts := map[string]time.Time{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[float64])
+			if !ok {
+				t.Fatalf("unexpected data %T", m.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				v, _ := dp.Attributes.Value("k")
+				starts[v.AsString()] = dp.StartTime
+			}
+		}
+	}
+	if !starts["second"].After(starts["first"].Add(10 * time.Millisecond)) {
+		t.Errorf("start times not per series: first=%v second=%v", starts["first"], starts["second"])
 	}
 }

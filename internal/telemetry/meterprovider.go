@@ -51,6 +51,10 @@ const (
 	EnvExportInterval  = "OTEL_METRIC_EXPORT_INTERVAL"
 	EnvProtocol        = "OTEL_EXPORTER_OTLP_PROTOCOL"
 	EnvMetricsProtocol = "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"
+
+	// EnvPerSeriesStartTimestamps is the OTel Go SDK's experimental flag for
+	// per-series start timestamps. See SetupMeterProvider.
+	EnvPerSeriesStartTimestamps = "OTEL_GO_X_PER_SERIES_START_TIMESTAMPS"
 )
 
 // SetupMeterProvider creates the ax-server MeterProvider and installs it as
@@ -74,7 +78,18 @@ const (
 // log the error and continue without metrics. shutdown flushes pending
 // metrics and stops the exporter; call it on server exit with a bounded
 // context.
+//
+// Unless OTEL_GO_X_PER_SERIES_START_TIMESTAMPS is already set, it is set to
+// "true". Each cumulative series then reports its own creation time as its
+// start time, not the provider's. Without that, Managed Prometheus' increase()
+// and rate() drop the first increment of any series created after the window
+// starts, such as a new agent's first cost delta or every first
+// ax.budget.threshold_crossed, because the start time (process start) lies
+// outside the window.
 func SetupMeterProvider(ctx context.Context) (metric.MeterProvider, func(context.Context) error, error) {
+	if _, ok := os.LookupEnv(EnvPerSeriesStartTimestamps); !ok {
+		_ = os.Setenv(EnvPerSeriesStartTimestamps, "true")
+	}
 	mp, shutdown, err := newMeterProvider(ctx, os.Getenv)
 	if err != nil {
 		return noop.NewMeterProvider(), noShutdown, err
