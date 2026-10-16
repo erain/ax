@@ -175,6 +175,7 @@ func (p *Puller) Stats() Stats {
 // Run sweeps immediately and then every Interval until ctx is done. Sweeps
 // never overlap. It returns ctx.Err().
 func (p *Puller) Run(ctx context.Context) error {
+	p.o.Logger.InfoContext(ctx, "usage puller started", "interval", p.o.Interval.String(), "port", p.o.Port)
 	t := time.NewTicker(p.o.Interval)
 	defer t.Stop()
 	for {
@@ -189,18 +190,36 @@ func (p *Puller) Run(ctx context.Context) error {
 
 // Sweep pulls every Running task with a worker IP once, with bounded
 // concurrency, and waits for all pulls to finish. Failures are counted and
-// logged at debug level.
+// logged at debug level; a sweep that contacted at least one runner logs one
+// INFO summary line (pulled/failed/applied and the last error).
 func (p *Puller) Sweep(ctx context.Context) {
 	if p.o.Tasks == nil {
 		return
 	}
 	tasks, err := p.o.Tasks.ListRunningTasks(ctx)
 	if err != nil {
-		p.o.Logger.DebugContext(ctx, "usage puller: listing running tasks failed", "error", err)
+		p.o.Logger.WarnContext(ctx, "usage puller: listing running tasks failed", "error", err)
 		return
 	}
 	sem := make(chan struct{}, p.o.Concurrency)
-	var wg sync.WaitGroup
+	var (
+		wg                      sync.WaitGroup
+		pulled, failed, applied atomic.Int64
+		lastErrMu               sync.Mutex
+		lastErr                 error
+		lastErrTask, lastErrIP  string
+	)
+	defer func() {
+		// One line per sweep that contacted runners, so pull failures are
+		// visible without debug logging.
+		if n := pulled.Load(); n > 0 {
+			attrs := []any{"pulled", n, "failed", failed.Load(), "applied", applied.Load()}
+			if lastErr != nil {
+				attrs = append(attrs, "lastErrorTask", lastErrTask, "lastErrorWorkerIP", lastErrIP, "lastError", lastErr.Error())
+			}
+			p.o.Logger.InfoContext(ctx, "usage puller sweep", attrs...)
+		}
+	}()
 	for _, task := range tasks {
 		if !pullable(task) {
 			continue
@@ -215,7 +234,18 @@ func (p *Puller) Sweep(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.pullLogged(ctx, task)
+			ok, err := p.pullLogged(ctx, task)
+			pulled.Add(1)
+			if err != nil {
+				failed.Add(1)
+				lastErrMu.Lock()
+				lastErr = err
+				lastErrTask = task.GetMetadata().GetAtespace() + "/" + task.GetMetadata().GetName()
+				lastErrIP = task.GetStatus().GetWorkerIp()
+				lastErrMu.Unlock()
+			} else if ok {
+				applied.Add(1)
+			}
 		}()
 	}
 	wg.Wait()
@@ -230,12 +260,13 @@ func (p *Puller) Flush(ctx context.Context, task *v1alpha1.Task) error {
 	if !pullable(task) {
 		return nil
 	}
-	return p.pullLogged(ctx, task)
+	_, err := p.pullLogged(ctx, task)
+	return err
 }
 
-func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) error {
+func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) (bool, error) {
 	p.pulls.Add(1)
-	err := p.pull(ctx, task)
+	applied, err := p.pull(ctx, task)
 	if err != nil {
 		p.failures.Add(1)
 		p.o.Logger.DebugContext(ctx, "usage puller: pull failed",
@@ -244,7 +275,7 @@ func (p *Puller) pullLogged(ctx context.Context, task *v1alpha1.Task) error {
 			"workerIP", task.GetStatus().GetWorkerIp(),
 			"error", err)
 	}
-	return err
+	return applied, err
 }
 
 // pullable reports whether the task's runner may be contacted.
@@ -254,13 +285,13 @@ func pullable(task *v1alpha1.Task) bool {
 		task.GetStatus().GetWorkerIp() != ""
 }
 
-func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) error {
+func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) (bool, error) {
 	ctx, cancel := context.WithTimeout(parent, p.o.Timeout)
 	defer cancel()
 
 	r, err := p.fetch(ctx, task.GetStatus().GetWorkerIp())
 	if err != nil {
-		return err
+		return false, err
 	}
 	now := p.o.Now()
 	if r.ReportTime.After(now.Add(MaxClockSkew)) {
@@ -296,10 +327,10 @@ func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("updating usage: %w", err)
+		return false, fmt.Errorf("updating usage: %w", err)
 	}
 	if d.IsZero() {
-		return nil
+		return false, nil
 	}
 	p.applied.Add(1)
 	if p.o.Hooks != nil && u != nil {
@@ -309,7 +340,7 @@ func (p *Puller) pull(parent context.Context, task *v1alpha1.Task) error {
 		defer hcancel()
 		p.o.Hooks.OnDelta(hctx, key, d, c, u)
 	}
-	return nil
+	return true, nil
 }
 
 // report mirrors the runner's GET /usage JSON (runner.UsageReport).
