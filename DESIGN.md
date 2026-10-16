@@ -45,6 +45,12 @@ The control plane exposes the `ax.v1alpha1.AX` gRPC service. Health checks are p
 | `ResumeTask` | Resume a suspended task. |
 | `WatchTask` | Server-streaming RPC that emits status and condition transitions as they happen. |
 
+**Usage**
+
+| RPC | Description |
+|---|---|
+| `ListUsage` | Per-task, per-UTC-day usage and cost, with priced charges. Filters: atespace, label selector, inclusive date range (default: last 30 days). See [docs/finops-focus.md](docs/finops-focus.md). |
+
 **Workspaces**
 
 | RPC | Description |

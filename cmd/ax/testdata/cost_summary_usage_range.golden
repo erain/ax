@@ -1,0 +1,6 @@
+GROUP    TASKS   ACTIVE    IDLE   TOKENS   COMPUTE   TOKENS$    STORAGE   TOTAL
+acme     1       25m0s     6m0s   88,600   $0.0320   $0.0425*   $0.0003   $0.0749
+globex   1       1h0m0s    0s     0        $0.0543   $0.0000    $0.0000   $0.0543
+TOTAL    2       1h25m0s   6m0s   88,600   $0.0863   $0.0425*   $0.0003   $0.1292
+* tokens partially unpriced: some models are not on the rate card; their tokens are counted but not priced
+Period: 2026-09-01 to 2026-10-15 (UTC days, inclusive)
