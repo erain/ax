@@ -17,12 +17,11 @@
 # and OTel env. Files outside this directory are referenced, so build with
 #   kubectl kustomize --load-restrictor=LoadRestrictionsNone deploy/finops
 # The ax-server image is still a ko:// reference; resolve it with ko
-# (see the Makefile target deploy-finops). Before T08's flags are in
-# cmd/ax-server, the pod would exit on unknown flags: do not apply until then.
+# (see the Makefile target deploy-finops).
 #
-# Task image: ax-server has no default-image flag or env (the reconciler falls
-# back to the v1alpha1.DefaultTaskImage constant, which this cluster cannot
-# pull), so every FinOps Task sets spec.image explicitly:
+# Task image: ax-server runs with --default-task-image set to the FinOps runner
+# image (the built-in gcr.io default is not pullable from this cluster), so
+# Tasks may omit spec.image:
 #   us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner:finops-latest
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

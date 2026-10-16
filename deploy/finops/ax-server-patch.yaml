@@ -39,6 +39,9 @@ spec:
             - "--usage-pull-interval=60s"
             - "--runner-port=80"
             - "--summary-interval=10m"
+            # Tasks without spec.image use the FinOps runner image (the
+            # built-in gcr.io default is not pullable from this cluster).
+            - "--default-task-image=us-central1-docker.pkg.dev/yiyu-gke-dev/ax-finops/ax-task-runner:finops-latest"
           env:
             - name: AX_SNAPSHOTS_BUCKET
               value: "gs://ax-finops-snapshots-yiyu-gke-dev/ate-env/"
