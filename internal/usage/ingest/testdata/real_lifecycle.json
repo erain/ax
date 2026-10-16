@@ -1,0 +1,3476 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "ate.otlp.relay",
+      "value": {
+       "stringValue": "relay"
+      }
+     },
+     {
+      "key": "k8s.deployment.name",
+      "value": {
+       "stringValue": "ax-pool"
+      }
+     },
+     {
+      "key": "k8s.namespace.name",
+      "value": {
+       "stringValue": "ax-system"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "ateom-gvisor"
+      }
+     },
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "go"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "1.45.0"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "github.com/agent-substrate/substrate/internal/actorevent"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1792158825775919180",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158825673139845"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.090974
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "21610496"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "21413888"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "21397504"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158825783714845",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158825673139845"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.103562
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "23494656"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "22573056"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "22556672"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158827406717839",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158827307448731"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.087105
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "21180416"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "20647936"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "20635648"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158828790400308",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158828705105712"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.092727
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "21135360"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "20942848"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "20926464"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158836583906436",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158836486449930"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.090941
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "21762048"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "21647360"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "21635072"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158836591209673",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158836486449930"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.103678
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "22892544"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "21921792"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "21905408"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158837508049135",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158827307448731"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.112597
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "22495232"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "21463040"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "21446656"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158837665169354",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158828705105712"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 9.0831
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "23429120"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "22052864"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "22036480"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158890138230201",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158827307448731"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.128511
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "22495232"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "21852160"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "21835776"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158891006997953",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158828705105712"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 63.026
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "23453696"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "22446080"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "22429696"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158934015686941",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158933932719423"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.099358
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "23707648"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "22896640"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "22884352"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158953861778533",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158953776718967"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.100099
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "initial"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "24231936"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "23982080"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "23969792"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158957508739345",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158933932719423"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 23.7973
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "26193920"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "24936448"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "24920064"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158957665128061",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158953776718967"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.126051
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "25120768"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "24231936"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "24215552"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792158975831772917",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158953776718967"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 0.133376
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "25821184"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "24350720"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "24334336"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792159017508757004",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158933932719423"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 84.1687
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "periodic"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "26193920"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "24965120"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "24948736"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      },
+      {
+       "timeUnixNano": "1792159066799235838",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor usage sampled"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.epoch",
+         "value": {
+          "intValue": "1792158933932719423"
+         }
+        },
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.sandbox.class",
+         "value": {
+          "stringValue": "gvisor"
+         }
+        },
+        {
+         "key": "ate.stats.cpu.time",
+         "value": {
+          "doubleValue": 121.003
+         }
+        },
+        {
+         "key": "ate.stats.kind",
+         "value": {
+          "stringValue": "final"
+         }
+        },
+        {
+         "key": "ate.stats.memory.peak",
+         "value": {
+          "intValue": "26513408"
+         }
+        },
+        {
+         "key": "ate.stats.memory.usage",
+         "value": {
+          "intValue": "25165824"
+         }
+        },
+        {
+         "key": "ate.stats.memory.working_set",
+         "value": {
+          "intValue": "25149440"
+         }
+        },
+        {
+         "key": "ate.stats.source",
+         "value": {
+          "stringValue": "cgroup"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        },
+        {
+         "key": "ate.workerpool.name",
+         "value": {
+          "stringValue": "ax-pool"
+         }
+        },
+        {
+         "key": "ate.workerpool.namespace",
+         "value": {
+          "stringValue": "ax-system"
+         }
+        }
+       ],
+       "eventName": "ate.actor.usage_sampled"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "k8s.deployment.name",
+      "value": {
+       "stringValue": "ate-api-server"
+      }
+     },
+     {
+      "key": "k8s.namespace.name",
+      "value": {
+       "stringValue": "ate-system"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "ateapi"
+      }
+     },
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "go"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "1.45.0"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "github.com/agent-substrate/substrate/internal/actorevent"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1792158825270104407",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "create"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158825661426524",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "create"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158825667025882",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158825778539401",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158825782793921",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspending"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158825832840354",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "create"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158826201379150",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158826312140158",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleting"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158826414186961",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "57beea1f-0a73-49e2-8174-bc7299e1012b"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleted"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "801a5c5d-b675-5c95-88ee-6e49175f3cca"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158827301297006",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158827409345982",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158828699407033",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158828794379538",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158836476346045",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "create"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158836480244175",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158836586453454",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158836590114627",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspending"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158836920165647",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158837064844397",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleting"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158837158212636",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "b8390a47-5d8d-4b07-aa55-e4e2d91dbbc1"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleted"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "bace87fe-81c5-5b3e-9ac9-082c0a796b09"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "ate-golden"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158890137159493",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspending"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158890459798691",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158891005814680",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspending"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158891314776252",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "suspend"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "suspended"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158933725727964",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158934018841256",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158953638539753",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "resuming"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158953865369444",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "resume"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "running"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158975830035161",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleting"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792158976002215114",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-sleep-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleted"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "0c5d2a76-1875-5025-ba01-6803dd3b89bc"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-sleep-095341-tmpl-7ae9d0f3"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792159066797703594",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleting"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      },
+      {
+       "timeUnixNano": "1792159066949471460",
+       "severityNumber": 9,
+       "body": {
+        "stringValue": "Actor state changed"
+       },
+       "attributes": [
+        {
+         "key": "ate.actor.name",
+         "value": {
+          "stringValue": "t13-burn-095341"
+         }
+        },
+        {
+         "key": "ate.actor.operation.name",
+         "value": {
+          "stringValue": "delete"
+         }
+        },
+        {
+         "key": "ate.actor.state",
+         "value": {
+          "stringValue": "deleted"
+         }
+        },
+        {
+         "key": "ate.actor.uid",
+         "value": {
+          "stringValue": "d8b0b808-ee89-53ac-aa83-0d728e0b8e14"
+         }
+        },
+        {
+         "key": "ate.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.atespace",
+         "value": {
+          "stringValue": "default"
+         }
+        },
+        {
+         "key": "ate.template.name",
+         "value": {
+          "stringValue": "t13-burn-095341-tmpl-f746e5d4"
+         }
+        }
+       ],
+       "eventName": "ate.actor.state_changed"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
