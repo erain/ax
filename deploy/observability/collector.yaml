@@ -27,6 +27,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: ax-system
+  labels:
+    # Required for ax-server -> api.ate-system:443. Keep it here too: applying
+    # this file without the label would remove it (three-way apply) after
+    # deploy/finops set it.
+    ate.dev/api-access: "true"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -99,10 +104,6 @@ data:
           # the order of actor state events for ax-server's accounting.
           num_consumers: 1
           queue_size: 5000
-      # Temporary: prints one line per batch of filtered actor events so the
-      # tee can be verified with `kubectl logs`. Remove once ax-server ingests.
-      debug/ate_actor_events:
-        verbosity: basic
 
     service:
       extensions: [health_check]
@@ -122,7 +123,7 @@ data:
         logs/ate_actor_events:
           receivers: [otlp]
           processors: [memory_limiter, filter/ate_actor_events, batch]
-          exporters: [otlp_http/ax_server, debug/ate_actor_events]
+          exporters: [otlp_http/ax_server]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -144,7 +145,7 @@ spec:
         app.kubernetes.io/part-of: ax
       annotations:
         # Bump to roll the pod after editing the ConfigMap.
-        ax.io/config-revision: "2"
+        ax.io/config-revision: "3"
     spec:
       serviceAccountName: otel-collector
       containers:
