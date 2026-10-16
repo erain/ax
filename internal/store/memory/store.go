@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/ax/internal/store"
@@ -113,17 +115,26 @@ func (s *MemoryStore) GetTask(ctx context.Context, atespace, name string) (*v1al
 	return cp, nil
 }
 
-func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, offset int64) ([]*v1alpha1.Task, error) {
+// ListTasks returns matching tasks newest first (by creation time, then by
+// atespace and name) so pagination is stable. A non-positive limit returns all
+// matching tasks from offset on.
+func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, selector v1alpha1.LabelSelector, limit, offset int64) ([]*v1alpha1.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var result []*v1alpha1.Task
 	for _, t := range s.tasks {
-		if atespace == "" || atespace == "*" || t.Metadata.Atespace == atespace {
+		if (atespace == "" || atespace == "*" || t.Metadata.Atespace == atespace) && selector.Matches(t.Metadata.GetLabels()) {
 			cp := clone(t)
 			result = append(result, cp)
 		}
 	}
+	slices.SortFunc(result, func(a, b *v1alpha1.Task) int {
+		if c := b.Metadata.GetCreationTimestamp().AsTime().Compare(a.Metadata.GetCreationTimestamp().AsTime()); c != 0 {
+			return c
+		}
+		return strings.Compare(taskKey(a.Metadata.Atespace, a.Metadata.Name), taskKey(b.Metadata.Atespace, b.Metadata.Name))
+	})
 
 	if offset >= int64(len(result)) {
 		return []*v1alpha1.Task{}, nil

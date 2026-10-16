@@ -95,8 +95,8 @@ This deploys Redis, then builds and deploys the control plane images with `ko`. 
 ```bash
 ax apply -f examples/task.yaml       # Task + Workspace + Model in one file
 ax get tasks
-# NAME      ATESPACE   PHASE     ACTOR           WORKER-IP    AGE
-# task123   default    Running   task123         10.20.3.67   1m
+# NAME      AGENT   ATESPACE   PHASE     ACTOR           WORKER-IP    AGE
+# task123   -       default    Running   task123         10.20.3.67   1m
 
 ax watch task task123                # stream phase and condition changes live
 ax ssh task123 -- ls -la /workspace  # poke around inside the sandbox
@@ -132,6 +132,7 @@ ax apply -f examples/task.yaml
 # Tasks
 ax get tasks                          # list
 ax get tasks -a my-atespace           # list in another atespace
+ax get tasks -l agent=coder,customer=acme  # filter by labels (AGENT column = label "agent")
 ax get task task123                   # full spec + live status as YAML
 ax describe task task123              # human-readable detail
 ax watch task task123                 # stream status and condition transitions

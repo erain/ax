@@ -17,9 +17,11 @@ package server_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -781,5 +783,168 @@ func TestServer_TransientSubstrateUnavailableRecovery(t *testing.T) {
 	}
 	if storedAfterResumeErr.GetStatus().GetPhase() != "Pending" {
 		t.Errorf("expected stored phase 'Pending' after transient ResumeTask error, got %q", storedAfterResumeErr.GetStatus().GetPhase())
+	}
+}
+
+func TestServer_TaskLabelsAndSelector(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := server.NewServer(memory.NewStore())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcSrv := srv.GRPCServer()
+	go func() { _ = grpcSrv.Serve(ln) }()
+	t.Cleanup(grpcSrv.Stop)
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := v1alpha1.NewAXClient(conn)
+
+	tasks := map[string]map[string]string{
+		"coder-acme":    {"agent": "coder", "customer": "acme"},
+		"coder-globex":  {"agent": "coder", "customer": "globex"},
+		"reviewer-acme": {"agent": "reviewer", "customer": "acme"},
+		"unlabeled":     nil,
+	}
+	for name, labels := range tasks {
+		if _, err := client.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+			Metadata: &v1alpha1.ObjectMeta{Name: name, Labels: labels},
+			Spec:     &v1alpha1.TaskSpec{Image: "alpine"},
+		}}); err != nil {
+			t.Fatalf("CreateTask(%s): %v", name, err)
+		}
+	}
+
+	// Get returns the labels.
+	got, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Name: "coder-acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(got.GetMetadata().GetLabels(), tasks["coder-acme"]) {
+		t.Errorf("GetTask labels = %v, want %v", got.GetMetadata().GetLabels(), tasks["coder-acme"])
+	}
+
+	// List filters by selector and returns the labels.
+	for _, tt := range []struct {
+		selector string
+		want     []string
+	}{
+		{"", []string{"coder-acme", "coder-globex", "reviewer-acme", "unlabeled"}},
+		{"agent=coder", []string{"coder-acme", "coder-globex"}},
+		{"customer=acme", []string{"coder-acme", "reviewer-acme"}},
+		{"agent=coder,customer=acme", []string{"coder-acme"}},
+		{" customer = globex ", []string{"coder-globex"}},
+		{"agent=nobody", nil},
+	} {
+		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: "default", LabelSelector: tt.selector})
+		if err != nil {
+			t.Fatalf("ListTasks(%q): %v", tt.selector, err)
+		}
+		var names []string
+		for _, task := range resp.GetTasks() {
+			names = append(names, task.GetMetadata().GetName())
+			if !maps.Equal(task.GetMetadata().GetLabels(), tasks[task.GetMetadata().GetName()]) {
+				t.Errorf("ListTasks(%q) %s labels = %v", tt.selector, task.GetMetadata().GetName(), task.GetMetadata().GetLabels())
+			}
+		}
+		slices.Sort(names)
+		if !slices.Equal(names, tt.want) {
+			t.Errorf("ListTasks(%q) = %v, want %v", tt.selector, names, tt.want)
+		}
+	}
+
+	// The selector is applied before pagination.
+	var paged []string
+	for offset := int64(0); offset < 3; offset++ {
+		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{LabelSelector: "agent=coder", Limit: 1, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range resp.GetTasks() {
+			paged = append(paged, task.GetMetadata().GetName())
+		}
+	}
+	slices.Sort(paged)
+	if want := []string{"coder-acme", "coder-globex"}; !slices.Equal(paged, want) {
+		t.Errorf("paged ListTasks(agent=coder) = %v, want %v", paged, want)
+	}
+
+	// Invalid selectors are rejected.
+	for _, sel := range []string{"agent", "agent!=coder", "agent=a,,b=c", "a b=c", "agent=x/y"} {
+		_, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{LabelSelector: sel})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("ListTasks(%q): got %v, want InvalidArgument", sel, err)
+		}
+	}
+
+	// Invalid labels are rejected at creation.
+	_, err = client.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "bad-labels", Labels: map[string]string{"agent": "has space"}},
+	}})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("CreateTask with invalid label: got %v, want InvalidArgument", err)
+	}
+
+	// Watch returns the labels, and status changes keep them.
+	stream, err := client.WatchTask(ctx, &v1alpha1.WatchTaskRequest{Name: "coder-globex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.GetAction() != "INITIAL" || !maps.Equal(ev.GetTask().GetMetadata().GetLabels(), tasks["coder-globex"]) {
+		t.Errorf("initial watch event = %s %v", ev.GetAction(), ev.GetTask().GetMetadata().GetLabels())
+	}
+	if _, err := client.ResumeTask(ctx, &v1alpha1.ResumeTaskRequest{Name: "coder-globex"}); err != nil {
+		t.Fatal(err)
+	}
+	ev, err = stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.GetTask().GetStatus().GetPhase() != "Running" || !maps.Equal(ev.GetTask().GetMetadata().GetLabels(), tasks["coder-globex"]) {
+		t.Errorf("modified watch event = %s %v", ev.GetTask().GetStatus().GetPhase(), ev.GetTask().GetMetadata().GetLabels())
+	}
+}
+
+func TestServer_CreateTask_LabelsImmutable(t *testing.T) {
+	ctx := context.Background()
+	st := memory.NewStore()
+	srv := server.NewServer(st)
+	spec := &v1alpha1.TaskSpec{Image: "alpine"}
+	// A Pending task (for example one whose first reconcile hit a transient
+	// error) may be re-applied with an identical spec and labels.
+	if err := st.SaveTask(ctx, &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t", Atespace: "default", Labels: map[string]string{"agent": "coder"}},
+		Spec:     spec,
+		Status:   &v1alpha1.TaskStatus{Phase: "Pending"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t", Labels: map[string]string{"agent": "reviewer"}},
+		Spec:     proto.Clone(spec).(*v1alpha1.TaskSpec),
+	}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("re-create with different labels: got %v, want FailedPrecondition", err)
+	}
+
+	got, err := srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "t", Labels: map[string]string{"agent": "coder"}},
+		Spec:     proto.Clone(spec).(*v1alpha1.TaskSpec),
+	}})
+	if err != nil {
+		t.Fatalf("re-create with same labels: %v", err)
+	}
+	if got.GetMetadata().GetLabels()["agent"] != "coder" {
+		t.Errorf("labels = %v", got.GetMetadata().GetLabels())
 	}
 }

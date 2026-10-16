@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -121,6 +122,7 @@ func (s *Server) ListTasks(ctx context.Context, req *v1alpha1.ListTasksRequest) 
 	atespace := ""
 	limit := int64(50)
 	offset := int64(0)
+	var selector v1alpha1.LabelSelector
 	if req != nil {
 		atespace = req.Atespace
 		if req.Limit > 0 {
@@ -129,8 +131,12 @@ func (s *Server) ListTasks(ctx context.Context, req *v1alpha1.ListTasksRequest) 
 		if req.Offset >= 0 {
 			offset = req.Offset
 		}
+		var err error
+		if selector, err = v1alpha1.ParseLabelSelector(req.LabelSelector); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 	}
-	tasks, err := s.store.ListTasks(ctx, atespace, limit, offset)
+	tasks, err := s.store.ListTasks(ctx, atespace, selector, limit, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing tasks: %v", err)
 	}
@@ -164,7 +170,10 @@ func (s *Server) CreateTask(ctx context.Context, req *v1alpha1.CreateTaskRequest
 
 	existing, err := s.store.GetTask(ctx, atespace, taskName)
 	if err == nil {
-		if existing.GetStatus().GetPhase() != "Pending" || !proto.Equal(existing.GetSpec(), task.GetSpec()) {
+		// Labels are immutable too: usage is attributed by the labels a task
+		// was created with.
+		if existing.GetStatus().GetPhase() != "Pending" || !proto.Equal(existing.GetSpec(), task.GetSpec()) ||
+			!maps.Equal(existing.GetMetadata().GetLabels(), task.GetMetadata().GetLabels()) {
 			return nil, status.Errorf(codes.FailedPrecondition, "task %s/%s already exists and is immutable", atespace, taskName)
 		}
 		task = existing

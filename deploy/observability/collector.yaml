@@ -1,0 +1,204 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Sidecar OpenTelemetry Collector for the Agent FinOps PoC.
+#
+# Agent Substrate's control plane (ateapi, atelet and its ateom relay,
+# ate-controller, atenet) is pointed at this collector through the
+# ate-system/ate-otel-config ConfigMap (OTEL_EXPORTER_OTLP_ENDPOINT, OTLP/gRPC
+# on :4317, with OTEL_LOGS_EXPORTER=otlp). It:
+#
+#   1. forwards all traces, metrics and logs unchanged to the GKE managed
+#      OpenTelemetry collector (Cloud Trace / Monitoring / Logging), and
+#   2. tees the actor events (ate.actor.state_changed, ate.actor.usage_sampled,
+#      ate.actor.crashed) to ax-server's OTLP/HTTP logs receiver.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ax-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: ax-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: ax
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      batch:
+        send_batch_max_size: 8192
+      # Keep only Substrate actor events. The filter processor DROPS records
+      # for which a condition is true, hence the negation. event_name is the
+      # OTLP LogRecord field (not an attribute); the body match is a fallback
+      # for emitters that do not set it.
+      filter/ate_actor_events:
+        error_mode: ignore
+        log_conditions:
+          - >-
+            not (log.event_name == "ate.actor.state_changed"
+            or log.event_name == "ate.actor.usage_sampled"
+            or log.event_name == "ate.actor.crashed"
+            or log.body == "Actor state changed"
+            or log.body == "Actor usage sampled"
+            or log.body == "Actor crashed")
+
+    exporters:
+      otlp_http/gke_managed:
+        endpoint: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4318
+        retry_on_failure:
+          enabled: true
+        sending_queue:
+          enabled: true
+      otlp_http/ax_server:
+        endpoint: http://ax-server.ax-system.svc.cluster.local:4318
+        logs_endpoint: http://ax-server.ax-system.svc.cluster.local:4318/v1/logs
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 10m
+        sending_queue:
+          enabled: true
+          # Single consumer: a retried batch blocks later batches, preserving
+          # the order of actor state events for ax-server's accounting.
+          num_consumers: 1
+          queue_size: 5000
+      # Temporary: prints one line per batch of filtered actor events so the
+      # tee can be verified with `kubectl logs`. Remove once ax-server ingests.
+      debug/ate_actor_events:
+        verbosity: basic
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/gke_managed]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/gke_managed]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/gke_managed]
+        logs/ate_actor_events:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/ate_actor_events, batch]
+          exporters: [otlp_http/ax_server, debug/ate_actor_events]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: ax
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/part-of: ax
+      annotations:
+        # Bump to roll the pod after editing the ConfigMap.
+        ax.io/config-revision: "2"
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.162.0
+          args:
+            - --config=/conf/config.yaml
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 13133
+              name: health
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: ax
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      appProtocol: grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
