@@ -55,6 +55,12 @@ type ServerOptions struct {
 	// MetadataPort is the loopback port for the /metadata endpoints. Zero picks
 	// a free port; read the result from MetadataURL after Start.
 	MetadataPort int
+	// ProbeHandlers are extra handlers served on the probe listener, keyed by
+	// path pattern. They are reachable from outside the container.
+	ProbeHandlers map[string]http.Handler
+	// MetadataHandlers are extra handlers served on the loopback metadata
+	// listener, keyed by path pattern. Only the task command can reach them.
+	MetadataHandlers map[string]http.Handler
 }
 
 // NewServer creates a new metadata and guest server serving the task and its
@@ -99,6 +105,9 @@ func NewServer(port int, task *v1alpha1.Task, workspaces []*v1alpha1.Workspace, 
 	probeMux := http.NewServeMux()
 	probeMux.HandleFunc("/healthz", s.handleHealthz)
 	probeMux.HandleFunc("/readyz", s.handleReadyz)
+	for pattern, h := range opt.ProbeHandlers {
+		probeMux.Handle(pattern, h)
+	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.grpcServer != nil && r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
@@ -122,6 +131,9 @@ func NewServer(port int, task *v1alpha1.Task, workspaces []*v1alpha1.Workspace, 
 	metadataMux := http.NewServeMux()
 	metadataMux.HandleFunc("/metadata/v1alpha1/ax/task", s.handleTask)
 	metadataMux.HandleFunc("/metadata/v1alpha1/ax/workspaces", s.handleWorkspaces)
+	for pattern, h := range opt.MetadataHandlers {
+		metadataMux.Handle(pattern, h)
+	}
 
 	s.metadataServer = &http.Server{
 		Addr:    net.JoinHostPort("127.0.0.1", fmt.Sprint(opt.MetadataPort)),

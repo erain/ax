@@ -260,3 +260,50 @@ func TestMetadataServer_MetadataOnlyOnLoopback(t *testing.T) {
 		t.Log("no non-loopback IPv4 address found; skipped the external address check")
 	}
 }
+
+func TestMetadataServer_ExtraHandlers(t *testing.T) {
+	task := &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "extra", Atespace: "default"},
+		Spec:     &v1alpha1.TaskSpec{Image: "ghcr.io/test/img"},
+	}
+	reply := func(body string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) })
+	}
+
+	srv := metadata.NewServer(0, task, nil, metadata.ServerOptions{
+		ProbeHandlers:    map[string]http.Handler{"/usage": reply("probe-usage")},
+		MetadataHandlers: map[string]http.Handler{"/metadata/v1alpha1/ax/usage": reply("metadata-usage")},
+	})
+	if err := srv.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer srv.Stop(context.Background())
+
+	tests := []struct {
+		name     string
+		url      string
+		wantCode int
+		wantBody string
+	}{
+		{"probe handler on probe listener", "http://" + srv.ProbeAddr() + "/usage", http.StatusOK, "probe-usage"},
+		{"probe handler not on metadata listener", srv.MetadataURL() + "/usage", http.StatusNotFound, ""},
+		{"metadata handler on metadata listener", srv.MetadataURL() + "/metadata/v1alpha1/ax/usage", http.StatusOK, "metadata-usage"},
+		{"metadata handler not on probe listener", "http://" + srv.ProbeAddr() + "/metadata/v1alpha1/ax/usage", http.StatusNotFound, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Get(tt.url)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tt.url, err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != tt.wantCode {
+				t.Fatalf("GET %s = %d, want %d", tt.url, resp.StatusCode, tt.wantCode)
+			}
+			if tt.wantBody != "" && string(body) != tt.wantBody {
+				t.Errorf("GET %s body = %q, want %q", tt.url, body, tt.wantBody)
+			}
+		})
+	}
+}

@@ -26,8 +26,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -46,6 +48,10 @@ const (
 	// DefaultWorkspacePath is the command's working directory when the task
 	// binds no workspaces.
 	DefaultWorkspacePath = v1alpha1.DefaultWorkspacePath
+	// DefaultWorkspaceRoot is the durable volume that survives suspend and
+	// resume, used when Config.WorkspaceRoot is empty. The usage counters are
+	// kept under it and workspaceBytes measures it.
+	DefaultWorkspaceRoot = "/workspace"
 
 	// stopGracePeriod is how long a running task command gets to exit after
 	// SIGTERM before it is killed during shutdown.
@@ -67,7 +73,19 @@ type Config struct {
 	// an entry of the task's spec.workspaces by name.
 	Workspaces []*v1alpha1.Workspace
 	// OnCommandExit, when set, is called once the task command has exited.
+	// The exit is already reflected in GET /usage when it is called.
 	OnCommandExit func(CommandExit)
+	// OTLPAddr is the loopback address of the OTLP/HTTP receiver that counts
+	// GenAI token usage reported by the command. Empty disables the receiver;
+	// a non-loopback address is an error. ax-task-runner defaults it to
+	// DefaultOTLPAddr.
+	OTLPAddr string
+	// WorkspaceRoot is the durable volume root. Empty means
+	// DefaultWorkspaceRoot.
+	WorkspaceRoot string
+	// UsageFile is where the cumulative token counters are persisted. Empty
+	// means .ax/usage.json under WorkspaceRoot.
+	UsageFile string
 }
 
 // mount pairs one workspace binding from the task spec with the Workspace
@@ -145,16 +163,41 @@ func Run(ctx context.Context, cfg Config) error {
 			workspaces = append(workspaces, m.ws)
 		}
 	}
+	wsRoot := cfg.WorkspaceRoot
+	if wsRoot == "" {
+		wsRoot = DefaultWorkspaceRoot
+	}
+	usageFile := cfg.UsageFile
+	if usageFile == "" {
+		usageFile = filepath.Join(wsRoot, usageFileRel)
+	}
 	slog.Info("initializing AX task runner", "port", port, "wsPath", wsPath, "workspaces", paths)
 
+	usage := newUsageTracker(usageFile, wsRoot)
 	metaServer := metadata.NewServer(port, cfg.Task, workspaces, metadata.ServerOptions{
-		WorkspacePath: wsPath,
-		MetadataPort:  metadataPort,
+		WorkspacePath:    wsPath,
+		MetadataPort:     metadataPort,
+		ProbeHandlers:    map[string]http.Handler{UsagePath: http.HandlerFunc(usage.handleReport)},
+		MetadataHandlers: map[string]http.Handler{UsageRecordPath: http.HandlerFunc(usage.handleRecord)},
 	})
 	if err := metaServer.Start(); err != nil {
 		return fmt.Errorf("starting metadata server: %w", err)
 	}
 	metadataURL := metaServer.MetadataURL()
+
+	var otlpEndpoint string
+	if cfg.OTLPAddr != "" {
+		receiver, err := startOTLPReceiver(cfg.OTLPAddr, usage)
+		if err != nil {
+			_ = metaServer.Stop(context.Background())
+			return err
+		}
+		otlpEndpoint = receiver.endpoint()
+		defer func() {
+			slog.Info("shutting down OTLP receiver")
+			_ = receiver.stop(context.Background())
+		}()
+	}
 	_ = os.Setenv("AX_METADATA_URL", metadataURL)
 	for _, e := range cfg.Task.GetSpec().GetEnv() {
 		_ = os.Setenv(e.GetName(), e.GetValue())
@@ -188,7 +231,7 @@ func Run(ctx context.Context, cfg Config) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = commandEnv(cfg.Task, metadataURL)
+	cmd.Env = commandEnv(cfg.Task, metadataURL, otlpEndpoint)
 	// A dedicated process group lets shutdown signal the command together with
 	// anything it spawned.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -203,11 +246,11 @@ func Run(ctx context.Context, cfg Config) error {
 
 	select {
 	case err := <-exited:
-		reportExit(cfg, cmd, err)
+		reportExit(cfg, usage, cmd, err)
 		// Keep the sandbox up and inspectable until told to stop.
 		<-ctx.Done()
 	case <-ctx.Done():
-		reportExit(cfg, cmd, stopCommand(cmd, exited))
+		reportExit(cfg, usage, cmd, stopCommand(cmd, exited))
 	}
 	return nil
 }
@@ -231,8 +274,9 @@ func stopCommand(cmd *exec.Cmd, exited <-chan error) error {
 	}
 }
 
-// reportExit logs how the command finished and notifies the OnCommandExit hook.
-func reportExit(cfg Config, cmd *exec.Cmd, err error) {
+// reportExit logs how the command finished, records it for GET /usage, and
+// notifies the OnCommandExit hook.
+func reportExit(cfg Config, usage *usageTracker, cmd *exec.Cmd, err error) {
 	exit := CommandExit{Pid: cmd.Process.Pid, ExitCode: -1, Err: err}
 	if cmd.ProcessState != nil {
 		exit.ExitCode = cmd.ProcessState.ExitCode()
@@ -242,15 +286,32 @@ func reportExit(cfg Config, cmd *exec.Cmd, err error) {
 	} else {
 		slog.Info("task command completed successfully", "pid", exit.Pid)
 	}
+	usage.commandDone(exit.ExitCode)
 	if cfg.OnCommandExit != nil {
 		cfg.OnCommandExit(exit)
 	}
 }
 
 // commandEnv builds the environment for the task command: the runner's own
-// environment, the metadata URL, and the Task's spec.env entries.
-func commandEnv(task *v1alpha1.Task, metadataURL string) []string {
+// environment, the metadata URL, the OTLP exporter settings pointing at the
+// loopback receiver (when enabled and not set by the Task), and the Task's
+// spec.env entries.
+func commandEnv(task *v1alpha1.Task, metadataURL, otlpEndpoint string) []string {
 	env := append(os.Environ(), "AX_METADATA_URL="+metadataURL)
+	if otlpEndpoint != "" {
+		taskEnv := make(map[string]bool)
+		for _, e := range task.GetSpec().GetEnv() {
+			taskEnv[e.GetName()] = true
+		}
+		for _, kv := range [][2]string{
+			{"OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint},
+			{"OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"},
+		} {
+			if !taskEnv[kv[0]] {
+				env = append(env, kv[0]+"="+kv[1])
+			}
+		}
+	}
 	for _, e := range task.GetSpec().GetEnv() {
 		env = append(env, fmt.Sprintf("%s=%s", e.GetName(), e.GetValue()))
 	}

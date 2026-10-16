@@ -60,6 +60,30 @@ make build-task-runner     # cross-compile for linux/amd64 and build the image
 make push-task-runner      # push it; set TASK_RUNNER_REPO to choose the registry
 ```
 
+### Token usage reporting
+
+The default runner counts the model tokens your command spends so AX can attribute them to the task. Your command reports usage in either of two ways, both on loopback only:
+
+- **OpenTelemetry.** The runner serves an OTLP/HTTP receiver on `127.0.0.1:4318` (`--otlp-addr`, empty disables it) and sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` and `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for the command unless `spec.env` sets them. `POST /v1/traces` and `/v1/metrics` accept protobuf or JSON, optionally gzipped; `/v1/logs` is accepted and dropped. Spans count the GenAI semantic-convention attributes `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, and `gen_ai.usage.reasoning.output_tokens` (older underscore spellings are also accepted), keyed by `gen_ai.response.model`, else `gen_ai.request.model`, else `unknown`. An optional `gen_ai.usage.cost.amount`/`gen_ai.usage.cost.currency` pair is passed through as the provider cost. Each span is counted once by trace and span id, and spans whose `gen_ai.operation.name` is `invoke_agent`, `create_agent`, `execute_tool`, or `invoke_workflow` are skipped because they summarize their child model calls. The `gen_ai.client.token.usage` histogram (input and output) is counted only for models no span has reported in this runner session, so emitting both signals does not double count.
+- **JSON.** `POST $AX_METADATA_URL/metadata/v1alpha1/ax/usage` with one record per model call:
+
+  ```json
+  {"model": "gemini-2.5-flash", "inputTokens": 1200, "outputTokens": 340, "cacheReadTokens": 100,
+   "cacheWriteTokens": 0, "reasoningTokens": 50, "cost": {"amount": 0.0012, "currency": "USD"}, "requestId": "call-42"}
+  ```
+
+  Every field is optional; `cost` only when the provider reports one. A `requestId` that was already counted is ignored, so retries are safe. The reply is `{"recorded": true}` or `{"recorded": false}` for a duplicate.
+
+The counters are cumulative and persisted atomically to `/workspace/.ax/usage.json` (`--workspace-root`, `--usage-file`), so they survive suspend, resume, and runner restarts. `GET /usage` on port 80 returns them for the AX server to collect:
+
+```json
+{"session": "9f2c4e1a7b3d5f60", "reportTime": "2026-10-16T12:00:00Z", "commandExited": true, "exitCode": 0,
+ "workspaceBytes": 52344,
+ "tokens": {"gemini-2.5-flash": {"input": 1200, "output": 340, "cacheRead": 100, "cacheWrite": 0, "reasoning": 50}}}
+```
+
+`session` changes every time the runner process starts. `commandExited` and `exitCode` describe the command of the current session. `workspaceBytes` is the size of the files under the workspace root, measured at most once a minute. `costAmount` and `costCurrency` appear on a model only when a provider cost was reported for it.
+
 ## Replacing the default runner
 
 There are three levels of customization. Pick the shallowest one that solves your problem.
@@ -180,3 +204,4 @@ Once the image is built, the fastest end-to-end check is a task with `debug: tru
 - Keeps running after the command exits
 - Forwards `SIGTERM` to the command's process group and exits after a grace period
 - Serves guest gRPC services on port 80 only when `spec.debug` is true
+- Optionally, serves `GET /usage` on port 80 so AX can attribute token usage to the task
